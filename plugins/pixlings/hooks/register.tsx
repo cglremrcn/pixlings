@@ -1181,7 +1181,17 @@ export const register: Register = (on, options) => {
       case 'wear': {
         const item = arg.toLowerCase()
         const level = levelOf(pixling.xp).level
-        if (item === 'none' || item === '') {
+        if (item === '') {
+          // No item named: show the wardrobe, change nothing.
+          const p = pixling
+          const rows = UNLOCKS.map(u => {
+            const name = u.hat ?? u.face ?? ''
+            const isOn = gearOf(p).hat === name || gearOf(p).face === name
+            return `${u.level <= level ? (isOn ? '● ' : '○ ') : '🔒 '}${name.padEnd(7)} ${u.label}${u.level <= level ? '' : ` (level ${u.level})`}`
+          })
+          return { text: [`${p.name}'s wardrobe (level ${level}). /pixling wear <item> or none:`, ...rows].join('\n') }
+        }
+        if (item === 'none') {
           pixling = { ...pixling, hat: 'none', face: 'none' }
         } else {
           const unlock = UNLOCKS.find(u => u.hat === item || u.face === item)

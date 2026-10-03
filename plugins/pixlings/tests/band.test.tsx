@@ -370,4 +370,16 @@ describe('the band', () => {
     await clock.advance(50)
     expect(ran.some(r => r.argv.join(' ').includes('MemoryStream'))).toBe(false)
   })
+
+  test('/pixling wear with no item shows the wardrobe and changes nothing', async ($, on) => {
+    const { clock } = host(on, { ...DUCK, xp: 200 })
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+    const shown = await $.command.run({ command: 'pixling', args: 'wear' } as never)
+    expect(shown.text).toContain('wardrobe')
+    expect(shown.text).toMatch(/● sprout/)
+    expect(shown.text).toMatch(/🔒 wizard/)
+    const again = await $.command.run({ command: 'pixling', args: 'wear' } as never)
+    expect(again.text).toMatch(/● sprout/)
+  })
 })
