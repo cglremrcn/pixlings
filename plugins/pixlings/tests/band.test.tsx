@@ -256,7 +256,8 @@ describe('the band', () => {
     expect(await ui.find({ type: 'Text', text: /cache ~4:5\d/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /0% cached/ })).toBeDefined()
 
-    await clock.advance(4 * 60_000 + 5_000)
+    // To 15.5 s short of the 5-minute mark: the warning has just come, its bubble still up.
+    await clock.advance(239_000)
     expect(sounds(ran)).toContain('clock')
     expect(await ui.find({ type: 'Text', text: /expires|cold|cools/ })).toBeDefined()
 
