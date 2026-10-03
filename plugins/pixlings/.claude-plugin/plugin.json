@@ -1,0 +1,46 @@
+{
+  "name": "pixlings",
+  "version": "0.1.0",
+  "description": "Hatch a tiny pixel creature that lives above your Claude Code prompt. It reacts to tests, commits and risky commands, makes sounds on every OS, naps through your rate limit and wakes Claude when it resets.",
+  "author": { "name": "cglremrcn", "url": "https://github.com/cglremrcn" },
+  "homepage": "https://github.com/cglremrcn/pixlings",
+  "repository": "https://github.com/cglremrcn/pixlings",
+  "license": "MIT",
+  "keywords": ["mod", "companion", "pet", "buddy", "sound", "notifications", "rate-limit"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "sound": {
+      "type": "string",
+      "title": "Sound",
+      "description": "all: every reaction makes a sound. important: only when Claude needs you, finishes a long turn or hits the limit. off: silent.",
+      "options": ["all", "important", "off"],
+      "default": "all"
+    },
+    "band": {
+      "type": "string",
+      "title": "Band above the prompt",
+      "description": "full: the animated pixling. minimal: one line with a face. off: no band (sounds and notifications stay).",
+      "options": ["full", "minimal", "off"],
+      "default": "full"
+    },
+    "chatter": {
+      "type": "string",
+      "title": "Chattiness",
+      "description": "normal: it comments on what happens. quiet: only on failures, danger and when it needs you.",
+      "options": ["normal", "quiet"],
+      "default": "normal"
+    },
+    "notifications": {
+      "type": "boolean",
+      "title": "Desktop notifications",
+      "description": "Notify the OS when Claude needs permission, finishes a long turn or the usage limit resets.",
+      "default": true
+    },
+    "autoContinue": {
+      "type": "boolean",
+      "title": "Continue after the usage limit resets",
+      "description": "When the usage limit resets, the pixling wakes up and tells Claude to carry on.",
+      "default": true
+    }
+  }
+}
