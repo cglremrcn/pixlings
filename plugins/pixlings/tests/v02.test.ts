@@ -343,6 +343,9 @@ describe('the share card', () => {
     expect(post).toContain('Mochi')
     expect(post).toContain(`https://${REPO}`)
     expect(post).toContain('4×')
+    const one = shareText({ ...pix, stats: { ...pix.stats, turns: 1, bugsSquashed: 1 } })
+    expect(one).toContain('1 turn, 1 bug squashed')
+    expect(shareText({ ...pix, stats: { ...pix.stats, turns: 2 } })).toContain('2 turns, 0 bugs squashed')
   })
 })
 

@@ -51,6 +51,9 @@ const frame = (p: Pixels, x: number, y: number, w: number, h: number, color: num
 /** 12,345: grouped by hand, as the mod's environment may have no Intl. */
 const n = (value: number): string => String(Math.round(value)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 
+/** "1 turn", "1,342 turns". */
+const count = (value: number, noun: string): string => `${n(value)} ${noun}${value === 1 ? '' : 's'}`
+
 type Stat = { label: Span; value: string }
 
 /** The stat sheet beside the pixling: four rows, label left, value right. */
@@ -180,7 +183,7 @@ export const shareText = (px: Pixling): string => {
   const badges = Object.keys(px.badges).length
   return (
     `Meet ${px.name}, my Lv ${level} ${shiny}${rarity} ${species?.name.toLowerCase() ?? 'pixling'} in Claude Code. ` +
-    `${n(px.stats.turns)} turns, ${n(px.stats.bugsSquashed)} bugs squashed, ${badges}/${BADGES.length} badges.${heard}` +
+    `${count(px.stats.turns, 'turn')}, ${count(px.stats.bugsSquashed, 'bug')} squashed, ${badges}/${BADGES.length} badges.${heard}` +
     ` Hatch yours: https://${REPO}`
   )
 }
