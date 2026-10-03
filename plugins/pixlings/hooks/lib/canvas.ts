@@ -7,7 +7,7 @@ import type { Point, Species } from './sprites.ts'
 export const CANVAS_W = 22
 /** The canvas height without a tall hat; a hat that needs headroom adds two rows at a time. */
 export const CANVAS_H = 18
-const SPRITE_X = 3
+export const SPRITE_X = 3
 const SPRITE_Y = 2
 
 export const TRANSPARENT = -1
@@ -25,6 +25,8 @@ export type Mood =
   | 'sleep'
   | 'love'
   | 'dizzy'
+  | 'walk'
+  | 'unimpressed'
 
 export type Icon = 'read' | 'edit' | 'bash' | 'web' | 'agent' | 'test'
 
@@ -43,6 +45,12 @@ export type FrameInput = {
   readonly icon?: Icon | null
   /** Draw the cactus bloom and similar species-specific flourishes. */
   readonly isBlooming?: boolean
+  /** The canvas width; wider than CANVAS_W gives the pixling room to walk. */
+  readonly width?: number
+  /** The sprite's left edge on the canvas. */
+  readonly x?: number
+  /** Faces left (the art faces right or front). */
+  readonly isFlipped?: boolean
 }
 
 export const blank = (w = CANVAS_W, h = CANVAS_H): Pixels => ({
@@ -95,7 +103,7 @@ const pick = <T>(list: readonly T[], i: number): T => list[((i % list.length) + 
 // ---------------------------------------------------------------------------------------------
 // Faces
 
-type EyeStyle = 'open' | 'closed' | 'happy' | 'sad' | 'wide' | 'spin' | 'lookLeft' | 'lookRight'
+type EyeStyle = 'open' | 'closed' | 'happy' | 'sad' | 'wide' | 'spin' | 'lookLeft' | 'lookRight' | 'rolled' | 'lidded'
 type MouthStyle = 'smile' | 'flat' | 'open' | 'frown' | 'o' | 'wavy' | 'none'
 
 const WHITE = 0xffffff
@@ -147,6 +155,16 @@ const drawEyes = (p: Pixels, s: Species, ox: number, oy: number, style: EyeStyle
           for (let dx = 0; dx < Math.max(w, 2); dx++) put(p, x + dx, y + dy, WHITE)
         }
         put(p, x + (index === 0 ? Math.max(w, 2) - 1 : 0), y + Math.max(h, 2) - 1, s.eyeColor)
+        return
+      case 'rolled':
+        // Pupils up, whites below: an eye roll.
+        fill(WHITE)
+        for (let dx = 0; dx < w; dx++) put(p, x + dx, y, s.eyeColor)
+        return
+      case 'lidded':
+        // A flat lid and a pupil peeking sideways: ¬_¬
+        for (let dx = 0; dx < w; dx++) put(p, x + dx, y, s.eyeColor)
+        put(p, x + w - 1, y + Math.max(h, 2) - 1, s.eyeColor)
         return
       case 'spin': {
         const phase = step(t, 120) % 2
@@ -358,7 +376,7 @@ const drawZzz = (p: Pixels, ox: number, oy: number, s: Species, t: number): void
   }
 }
 
-const drawSparkles = (p: Pixels, t: number, colors: readonly number[]): void => {
+const drawSparkles = (p: Pixels, ox: number, t: number, colors: readonly number[]): void => {
   const spots: Point[] = [
     [1, 3],
     [18, 2],
@@ -367,7 +385,8 @@ const drawSparkles = (p: Pixels, t: number, colors: readonly number[]): void => 
     [17, 15],
     [2, 15],
   ]
-  spots.forEach(([x, y], i) => {
+  spots.forEach(([sx, y], i) => {
+    const x = sx + ox - SPRITE_X
     const phase = (step(t, 110) + i * 2) % 6
     const color = pick(colors, i)
     if (phase < 2) put(p, x + 1, y + 1, color)
@@ -376,9 +395,9 @@ const drawSparkles = (p: Pixels, t: number, colors: readonly number[]): void => 
 }
 
 const drawConfetti = (p: Pixels, t: number): void => {
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < Math.round(14 * (p.w / CANVAS_W)); i++) {
     const speed = 60 + Math.floor(hash(i * 7) * 60)
-    const x = Math.floor(hash(i * 13 + 1) * CANVAS_W)
+    const x = Math.floor(hash(i * 13 + 1) * p.w)
     const y = (step(t, speed) + Math.floor(hash(i * 31) * p.h)) % (p.h + 4)
     put(p, x + (step(t, 300) % 2), y - 2, pick(CONFETTI, i))
   }
@@ -496,24 +515,51 @@ const pose = (mood: Mood, t: number): Pose => {
       return { dx: 0, dy: step(t, 400) % 2, eyes: 'happy', mouth: 'smile', hasCheeks: true }
     case 'dizzy':
       return { dx: step(t, 400) % 2, dy: 0, eyes: 'spin', mouth: 'wavy', hasCheeks: false }
+    case 'walk':
+      return { dx: 0, dy: -(step(t, 140) % 2), eyes: blinking(t) ? 'closed' : 'open', mouth: 'smile', hasCheeks: false }
+    case 'unimpressed':
+      return { dx: 0, dy: 0, eyes: t < 900 ? 'rolled' : 'lidded', mouth: 'flat', hasCheeks: false }
   }
+}
+
+const mirrors = new Map<string, Species>()
+
+/** The species facing the other way: art reversed, anchors moved to match. */
+export const mirror = (s: Species): Species => {
+  const cached = mirrors.get(s.id)
+  if (cached) return cached
+  const flip = (row: string): string => [...row].reverse().join('')
+  const [w] = s.eyeSize
+  const m: Species = {
+    ...s,
+    art: s.art.map(flip),
+    eyes: [...s.eyes].reverse().map(([x, y]) => [16 - x - w, y] as const),
+    mouth: s.mouth ? [16 - s.mouth[0] - 4, s.mouth[1]] : null,
+    cheeks: [...s.cheeks].reverse().map(([x, y]) => [16 - x - 2, y] as const),
+    head: [16 - s.head[0], s.head[1]],
+    wiggle: s.wiggle?.map(w2 => ({ row: w2.row, frames: w2.frames.map(flip) })),
+  }
+  mirrors.set(s.id, m)
+  return m
 }
 
 /** Composes one frame of a pixling. */
 export const renderFrame = (input: FrameInput): Pixels => {
-  const { species: s, mood, t } = input
+  const { mood, t } = input
+  const s = input.isFlipped ? mirror(input.species) : input.species
   const layout = layoutFor(s, input.hat)
-  const p = blank(CANVAS_W, layout.h)
+  const p = blank(input.width ?? CANVAS_W, layout.h)
+  const spriteX = input.x ?? SPRITE_X
   const palette = input.isShiny ? s.shiny : s.palette
   const look = pose(mood, t)
   const { dx, eyes, mouth, hasCheeks } = look
   const dy = Math.max(look.dy, -headroom(s, layout.y, input.hat))
-  const ox = SPRITE_X + dx
+  const ox = spriteX + dx
   const oy = layout.y + dy
   const eyeColor = (input.isShiny && s.shinyEyeColor) || s.eyeColor
   const body = eyeColor === s.eyeColor ? s : { ...s, eyeColor }
 
-  if (mood === 'sad') drawRain(p, SPRITE_X, s, t)
+  if (mood === 'sad') drawRain(p, spriteX, s, t)
   if (mood === 'celebrate') drawConfetti(p, t)
 
   drawBody(p, s, ox, oy, palette, t)
@@ -541,10 +587,10 @@ export const renderFrame = (input: FrameInput): Pixels => {
       drawZzz(p, ox, oy, s, t)
       break
     case 'celebrate':
-      drawSparkles(p, t, [0xffe14d, 0xffffff, 0x5ad1ff])
+      drawSparkles(p, ox, t, [0xffe14d, 0xffffff, 0x5ad1ff])
       break
     case 'happy':
-      drawSparkles(p, t + 300, [0xffe14d])
+      drawSparkles(p, ox, t + 300, [0xffe14d])
       break
     case 'love':
       drawHearts(p, ox, oy, s, t)
@@ -562,12 +608,12 @@ export const renderFrame = (input: FrameInput): Pixels => {
     default:
       break
   }
-  if (input.icon && (mood === 'working' || mood === 'idle')) {
+  if (input.icon && (mood === 'working' || mood === 'idle' || mood === 'walk')) {
     const gear = ICONS[input.icon]
-    stamp(p, CANVAS_W - 5, 0, gear.rows, gear.colors)
+    stamp(p, Math.min(p.w - 5, ox + s.head[0] + 5), Math.max(0, oy + s.head[1] - 3), gear.rows, gear.colors)
   }
   if (input.isShiny && step(t, 1700) % 3 === 0) {
-    put(p, 1, 1 + (step(t, 200) % 2), 0xfff6a8)
+    put(p, ox - 2, oy + 1 + (step(t, 200) % 2), 0xfff6a8)
   }
   return p
 }

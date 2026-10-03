@@ -25,6 +25,18 @@ export const blitPixels = (img: Rgb, p: Pixels, x0: number, y0: number, scale: n
 
 const MOODS: Mood[] = ['idle', 'working', 'happy', 'celebrate', 'sad', 'alarmed', 'attention', 'sleep', 'love', 'dizzy']
 
+/** Roaming and the newer moods: [label, input overrides]. */
+const MOTION: { mood: Mood; t: number; isFlipped?: boolean; icon?: 'bash' }[] = [
+  { mood: 'walk', t: 0 },
+  { mood: 'walk', t: 140, isFlipped: true },
+  { mood: 'idle', t: 0, isFlipped: true },
+  { mood: 'working', t: 0, isFlipped: true, icon: 'bash' },
+  { mood: 'unimpressed', t: 300 },
+  { mood: 'unimpressed', t: 2000 },
+  { mood: 'unimpressed', t: 2000, isFlipped: true },
+  { mood: 'celebrate', t: 500, isFlipped: true },
+]
+
 const main = (): void => {
   const out = process.argv[2] ?? 'preview'
   const t = Number(process.argv[3] ?? 0)
@@ -48,6 +60,19 @@ const main = (): void => {
       })
     })
     const file = join(out, isShiny ? 'sheet-shiny.png' : 'sheet.png')
+    writeFileSync(file, encodePng(img))
+    console.log(`wrote ${file} (${img.w}×${img.h})`)
+  }
+
+  {
+    const img = rgb(cellW * MOTION.length, cellH * SPECIES.length, BG)
+    SPECIES.forEach((species, row) => {
+      MOTION.forEach((m, col) => {
+        const frame = renderFrame({ species, isShiny: false, ...m })
+        blitPixels(img, frame, col * cellW + SCALE, row * cellH + SCALE, SCALE)
+      })
+    })
+    const file = join(out, 'sheet-motion.png')
     writeFileSync(file, encodePng(img))
     console.log(`wrote ${file} (${img.w}×${img.h})`)
   }

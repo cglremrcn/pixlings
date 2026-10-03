@@ -32,6 +32,17 @@ export type LineKey =
   | 'pet'
   | 'rename'
   | 'doze'
+  | 'absolutelyRight'
+  | 'greatQuestion'
+  | 'apology'
+  | 'perfect'
+  | 'badge'
+  | 'streak'
+  | 'recap'
+  | 'cacheCooling'
+  | 'cacheCold'
+  | 'cacheLearned'
+  | 'share'
 
 const LINES: Record<LineKey, readonly string[]> = {
   hatch: [
@@ -121,6 +132,30 @@ const LINES: Record<LineKey, readonly string[]> = {
   pet: ['♥', 'Hehe.', 'Again!', '*purrs?*', 'Best developer.', '*happy wiggle*'],
   rename: ['{name}? I love it!', 'Call me {name}!', '{name}. Has a nice ring to it.'],
   doze: ['*yawn*', 'Just resting my eyes...'],
+  absolutelyRight: [
+    "\"You're absolutely right.\" That's {n} now.",
+    'Absolutely right, #{n}. I keep a tally.',
+    '*eye roll* Absolutely right number {n}.',
+    "You're absolutely right ({n}). Are you though?",
+  ],
+  greatQuestion: ['Great question, apparently. ({n})', "Ah yes, a 'great question'. #{n}"],
+  apology: ['Apologies for the confusion, #{n}. Sure.', 'Another apology. {n} and counting.'],
+  perfect: ['"Perfect!" Is it, though? ({n})', 'Perfect! #{n}. Everything is perfect.'],
+  badge: ['Badge earned: {item}!', 'New badge: {item}. Shiny.', '{item}! Pinning it on.'],
+  streak: ['Day {n} in a row. 🔥', '{n}-day streak! Keep it going.', 'Streak: {n} days. We are unstoppable.'],
+  recap: ['{label}', 'Good to see you. {label}'],
+  cacheCooling: [
+    'Cache cools in {dur}. Reply soon, save tokens.',
+    'Psst: the prompt cache expires in {dur}.',
+    '{dur} until the cache goes cold!',
+  ],
+  cacheCold: [
+    'Cache went cold. Re-read {n} tokens. 🧊',
+    'Brrr. {n} tokens re-cached after {dur}.',
+    'Cold start: {n} tokens paid again.',
+  ],
+  cacheLearned: ['Noted: your cache lives {item}.', 'Your prompt cache lasts {item}. Countdown fixed.'],
+  share: ['Saved my card! Show me off.', 'Card printed. I look great.', 'Trading card ready. Post me!'],
 }
 
 /** A species' own lines, mixed in with the shared ones. */

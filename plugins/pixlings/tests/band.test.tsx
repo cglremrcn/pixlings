@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
+import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { SPECIES } from '../hooks/lib/sprites.ts'
@@ -17,25 +18,67 @@ const BAND = {
   viewport: { columns: 110, rows: 40 },
 } as const
 
-type Ran = { argv: readonly string[] }
+type Ran = { argv: readonly string[]; init?: { stdin?: string; env?: Record<string, string> } }
 
 /** Answers what the pixling asks of the engine beneath it, and records host processes. */
 const host = (on: On, stored?: unknown) => {
   const clock = mock.clock(on, { now: Date.parse('2026-10-03T12:00:00Z') })
   mock.store(on, stored === undefined ? {} : { pixling: stored })
-  mock.env(on, { OS: 'Windows_NT' })
+  mock.env(on, { OS: 'Windows_NT', USERPROFILE: 'C:\\Users\\tester' })
   const ran: Ran[] = []
+  const toasts: string[] = []
+  const copied: string[] = []
   on('process.run', ($, e) => {
-    ran.push({ argv: e.argv })
+    ran.push({ argv: e.argv, init: e.init })
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
-  on('ui.toast', () => ({ value: undefined }) as never)
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+    return { value: undefined } as never
+  })
+  on('ui.copy', ($, e) => {
+    copied.push(e.text)
+    return { value: { isCopied: true } } as never
+  })
+  on('prompt.read', () => ({ value: { text: '', cursor: 0 } }) as never)
   on('ui.invalidate', () => ({ value: undefined }) as never)
   on('ui.blit', () => ({ value: {} }) as never)
   on('ui.render', () => ({ type: 'Box', props: {}, children: [] }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  return { clock, ran }
+  return { clock, ran, toasts, copied }
+}
+
+type Engine = Parameters<TestBody>[0]
+
+type Reply = { answer: string; read: number; written: number }
+
+/**
+ * The model beneath the plugins: each request the test raises takes the next queued reply.
+ * Registered before the test's first call on `$`, as the kit asks.
+ */
+const model = (on: On) => {
+  const queue: Reply[] = []
+  on('turn.step', async function* ($, e) {
+    const r = queue.shift() ?? { answer: '', read: 0, written: 0 }
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: r.answer,
+      toolUses: [],
+      stopReason: 'end_turn' as const,
+      usage: { input_tokens: 20, output_tokens: 400, cache_read_input_tokens: r.read, cache_creation_input_tokens: r.written, model: 'test' },
+    }
+  })
+  /** One main-thread request answered with `answer` and these cache counts. */
+  return async ($: Engine, answer: string, read: number, written: number): Promise<void> => {
+    queue.push({ answer, read, written })
+    const stream = $.turn.step({ turnId: 't', index: 0, model: 'test', messageCount: 3 })
+    for await (const _ of stream) {
+      // Drain the chunks; the result is what the pixling reads.
+    }
+    await stream.result
+  }
 }
 
 const DUCK = {
@@ -49,6 +92,8 @@ const DUCK = {
   face: null,
   stats: {},
   dex: ['duck'],
+  // Earned already, so its celebration does not hold the stage during a test.
+  badges: { hello: 1 },
 }
 
 const sounds = (ran: Ran[]): string[] =>
@@ -197,5 +242,106 @@ describe('the band', () => {
       expect(s.verbs.length).toBeGreaterThan(0)
       expect(s.past.length).toBeGreaterThan(0)
     }
+  })
+
+  test('a model request starts the cache countdown; a minute before it cools the pixling warns', async ($, on) => {
+    const { clock, ran } = host(on, DUCK)
+    const step = model(on)
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await step($, 'Here is the plan.', 0, 64_000)
+    // The countdown starts at 5:00 and shows 4:59 once a whole second has passed.
+    await clock.advance(2500)
+    expect(await ui.find({ type: 'Text', text: /cache ~4:5\d/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /0% cached/ })).toBeDefined()
+
+    await clock.advance(4 * 60_000 + 5_000)
+    expect(sounds(ran)).toContain('clock')
+    expect(await ui.find({ type: 'Text', text: /expires|cold|cools/ })).toBeDefined()
+
+    await clock.advance(70_000)
+    expect(await ui.find({ type: 'Text', text: '❄ cache cold' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('coming back after the cache expired is a cold start it counts', async ($, on) => {
+    const { clock, ran } = host(on, DUCK)
+    const step = model(on)
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await step($, 'First.', 0, 64_000)
+    await clock.advance(9 * 60_000)
+    await step($, 'Back again.', 0, 66_000)
+    await clock.advance(50)
+    expect(sounds(ran)).toContain('freeze')
+    expect(await ui.find({ type: 'Text', text: /66k/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test("\"You're absolutely right\" gets an eye roll and a running count", async ($, on) => {
+    const { clock, ran } = host(on, DUCK)
+    const step = model(on)
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await step($, "You're absolutely right! The test was wrong.", 30_000, 2_000)
+    await clock.advance(50)
+    expect(sounds(ran)).toContain('eyeroll')
+    expect(await ui.find({ type: 'Text', text: /bsolutely right/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /\b1\b/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a badge is earned once, with a fanfare and a toast', async ($, on) => {
+    const { clock, ran, toasts } = host(on, { ...DUCK, stats: { bugsSquashed: 9 }, badges: { hello: 1 } })
+    let output = '==== 1 failed, 3 passed in 0.5s ===='
+    let isError = true
+    on('tool.call', () =>
+      isError
+        ? { isError: true as const, result: { stdout: output, stderr: '', interrupted: false }, text: output }
+        : { result: { stdout: output, stderr: '', interrupted: false }, text: output },
+    )
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(10_000)
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: 'pytest -q' } as never)
+    await clock.advance(5000)
+    output = '==== 4 passed in 0.5s ===='
+    isError = false
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'b2', command: 'pytest -q' } as never)
+    await clock.advance(1000)
+    expect(sounds(ran)).toContain('badge')
+    expect(toasts.filter(t => t.includes('Exterminator')).length).toBe(1)
+    await clock.advance(5000)
+    expect(toasts.filter(t => t.includes('Exterminator')).length).toBe(1)
+    const list = await $.command.run({ command: 'pixling', args: 'badges' } as never)
+    expect(list.text).toMatch(/Badges 2\/16/)
+  })
+
+  test('/pixling share saves a PNG through a process and copies a post', async ($, on) => {
+    const { clock, ran, copied } = host(on, DUCK)
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+    const shared = await $.command.run({ command: 'pixling', args: 'share' } as never)
+    expect(shared.text).toContain('C:\\Users\\tester\\pixling-quackers.png')
+    const write = ran.find(r => r.init?.env?.['PIXLING_OUT'] !== undefined)
+    expect(write?.init?.env?.['PIXLING_OUT']).toBe('C:\\Users\\tester\\pixling-quackers.png')
+    // A PNG's signature, base64: iVBORw0KGgo
+    expect(write?.init?.stdin?.startsWith('iVBORw0KGgo')).toBe(true)
+    expect(ran.some(r => r.argv[0] === 'explorer.exe')).toBe(true)
+    expect(copied[0]).toContain('github.com/cglremrcn/pixlings')
+    await clock.advance(50)
+    expect(sounds(ran)).toContain('shutter')
+  })
+
+  test('with room to spare the band widens and the pixling walks it', async ($, on) => {
+    const { clock } = host(on, DUCK)
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    const raster = await ui.find({ type: 'Raster' })
+    expect(raster?.props['columns']).toBe(22 + 30)
+    await ui.unmount()
   })
 })

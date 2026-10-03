@@ -261,6 +261,43 @@ def babble(voice: str, syllables: int, seed: int) -> np.ndarray:
     return seq(*parts)
 
 
+def s_clock() -> np.ndarray:
+    """Tick-tock, tick-tock, then a soft chime: the prompt cache is about to cool."""
+    tick = lambda f, seed: tone(f, 0.035, "sine", decay=0.012) + lowpass(noise(0.035, 0.35, 0.006, seed), 5000)  # noqa: E731
+    y = seq(tick(1900, 1), silence(0.2), tick(1400, 2), silence(0.2), tick(1900, 3), silence(0.2), tick(1400, 4), silence(0.12))
+    return seq(y, bell("E6", 0.3, 0.7))
+
+
+def s_freeze() -> np.ndarray:
+    """A crystalline shimmer falling away: the cache went cold."""
+    notes = ["E7", "B6", "G#6", "E6", "B5"]
+    sparkle = seq(*[bell(n, 0.09, 0.8) for n in notes])
+    wind = lowpass(noise(len(sparkle) / SR + 0.25, 0.25, 0.3, 11), 1800)
+    return over(sparkle, wind)
+
+
+def s_eyeroll() -> np.ndarray:
+    """A slow sliding whistle up and back down: "sure, absolutely right"."""
+    up = tone(520, 0.22, "triangle", vol=0.8, slide_to=880, release=0.04)
+    down = tone(880, 0.32, "triangle", vol=0.8, slide_to=330, release=0.12, vibrato=0.015)
+    huff = lowpass(noise(0.12, 0.35, 0.05, 5), 1200)
+    return seq(soft(seq(up, down), 3600), huff)
+
+
+def s_badge() -> np.ndarray:
+    """A short fanfare with a sparkle on top."""
+    lead = seq(chip("G5", 0.09, 0.5), chip("G5", 0.06, 0.5), chip("C6", 0.1, 0.5), chip("E6", 0.42, 0.5, decay=0.22))
+    harmony = seq(silence(0.25), chip("G5", 0.42, 0.25, 0.6, decay=0.22))
+    return over(lead, harmony, seq(silence(0.3), bell("C7", 0.4, 0.5)))
+
+
+def s_shutter() -> np.ndarray:
+    """A camera shutter and a little print-out whir: the trading card is saved."""
+    click = lambda seed: lowpass(noise(0.025, 1.0, 0.006, seed), 6000)  # noqa: E731
+    whir = soft(tone(330, 0.35, "square", duty=0.125, vol=0.25, slide_to=380, vibrato=0.04, vibrato_hz=40), 2000)
+    return seq(click(21), silence(0.06), click(22), silence(0.08), whir, bell("C7", 0.25, 0.5))
+
+
 def write(path: Path, y: np.ndarray) -> None:
     peak = float(np.max(np.abs(y))) or 1.0
     y = np.concatenate([y / peak * PEAK, silence(0.03)])
@@ -290,6 +327,11 @@ def main() -> None:
         "levelup": s_levelup(),
         "pet": s_pet(),
         "error": s_error(),
+        "clock": s_clock(),
+        "freeze": s_freeze(),
+        "eyeroll": s_eyeroll(),
+        "badge": s_badge(),
+        "shutter": s_shutter(),
         "hatch-1": hatch(1),
         "hatch-2": hatch(2),
         "hatch-3": hatch(3),

@@ -84,3 +84,63 @@ export const assetPath = (root: string, relative: string, platform: Platform): s
   const sep = platform === 'windows' || /^[A-Za-z]:\\/.test(root) ? '\\' : '/'
   return root.replace(/[\\/]+$/, '') + sep + relative.split('/').join(sep)
 }
+
+// Files and speech ------------------------------------------------------------------------------
+
+/**
+ * A process that writes its standard input, base64, to the file named by the `PIXLING_OUT`
+ * environment variable: the engine's `$.fs.write` writes text, and a PNG is bytes.
+ */
+export const writeBytesArgv = (platform: Platform): string[] =>
+  platform === 'windows'
+    ? [
+        POWERSHELL,
+        ...PS_FLAGS,
+        '[IO.File]::WriteAllBytes($env:PIXLING_OUT, [Convert]::FromBase64String([Console]::In.ReadToEnd()))',
+      ]
+    : ['sh', '-c', 'base64 --decode > "$PIXLING_OUT"']
+
+/** Opens a file in the desktop's own viewer; null where there is none to reach. */
+export const openArgv = (platform: Platform, path: string): string[] | null => {
+  switch (platform) {
+    case 'windows':
+      return ['explorer.exe', path]
+    case 'mac':
+      return ['open', path]
+    case 'linux':
+      return ['xdg-open', path]
+    case 'wsl':
+    case 'unknown':
+      return null
+  }
+}
+
+/** Speaks its standard input aloud in an English voice, through Windows' own synthesizer. */
+export const windowsSpeech = (): string[] => [
+  POWERSHELL,
+  ...PS_FLAGS,
+  [
+    'Add-Type -AssemblyName System.Speech',
+    '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
+    "$v = $s.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like 'en*' } | Select-Object -First 1",
+    'if ($v) { $s.SelectVoice($v.VoiceInfo.Name) }',
+    '$s.Rate = 1',
+    '$s.Speak([Console]::In.ReadToEnd())',
+  ].join('; '),
+]
+
+/** The first Linux speaker found by `command -v`, as an argv builder taking the text. */
+export const linuxSpeaker = (found: string): ((text: string) => string[]) | null => {
+  const bin = found.trim().split('\n')[0]?.trim() ?? ''
+  if (bin.endsWith('spd-say')) return text => [bin, '--wait', text]
+  if (bin.endsWith('espeak-ng') || bin.endsWith('espeak')) return text => [bin, text]
+  return null
+}
+
+/** A line made fit to say: emoji, kaomoji and markup dropped, whitespace folded. */
+export const speakable = (text: string): string =>
+  text
+    .replace(/\p{Extended_Pictographic}|\p{Emoji_Modifier}|‍|️/gu, '')
+    .replace(/[*_`~<>[\]{}|\^]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()

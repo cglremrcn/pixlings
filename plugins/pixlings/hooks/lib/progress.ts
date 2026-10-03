@@ -3,6 +3,7 @@
 import type { Face, Hat } from './canvas.ts'
 import { RARITY_ORDER, RARITY_WEIGHT, SPECIES } from './sprites.ts'
 import type { Rarity, Species } from './sprites.ts'
+import type { TicCounts } from './tics.ts'
 
 export type Stats = {
   turns: number
@@ -17,7 +18,17 @@ export type Stats = {
   pets: number
   naps: number
   permissions: number
+  /** Turns between midnight and five. */
+  nights: number
+  /** Times the prompt cache went cold under a pause. */
+  coldStarts: number
 }
+
+/** Consecutive days with at least one turn, by local date. */
+export type Streak = { last: string | null; days: number; best: number }
+
+/** One local day's work, for the morning recap. */
+export type Day = { date: string; turns: number; commits: number; squashed: number; tests: number; xp: number }
 
 export type Pixling = {
   v: 1
@@ -32,6 +43,12 @@ export type Pixling = {
   stats: Stats
   /** Every species this person has hatched, for the dex. */
   dex: string[]
+  /** Badge id → when it was earned. */
+  badges: Record<string, number>
+  streak: Streak
+  day: Day
+  /** The model's verbal tics the pixling has heard, by kind. */
+  tics: TicCounts
 }
 
 export const emptyStats = (): Stats => ({
@@ -47,7 +64,11 @@ export const emptyStats = (): Stats => ({
   pets: 0,
   naps: 0,
   permissions: 0,
+  nights: 0,
+  coldStarts: 0,
 })
+
+export const emptyDay = (date: string): Day => ({ date, turns: 0, commits: 0, squashed: 0, tests: 0, xp: 0 })
 
 export const SHINY_ODDS = 64
 
@@ -91,6 +112,10 @@ export const hatchPixling = (random: () => number, now: number, dex: readonly st
     face: null,
     stats: emptyStats(),
     dex: [...new Set([...dex, species.id])],
+    badges: {},
+    streak: { last: null, days: 0, best: 0 },
+    day: emptyDay(''),
+    tics: {},
   }
 }
 
@@ -157,7 +182,7 @@ export const gain = (
   event: XpEvent,
 ): { pixling: Pixling; levelUp: { level: number; unlocks: Unlock[] } | null } => {
   const before = levelOf(p.xp).level
-  const pixling = { ...p, xp: p.xp + XP[event] }
+  const pixling = { ...p, xp: p.xp + XP[event], day: { ...p.day, xp: p.day.xp + XP[event] } }
   const after = levelOf(pixling.xp).level
   if (after <= before) return { pixling, levelUp: null }
   return {
@@ -188,8 +213,28 @@ export const revive = (value: unknown): Pixling | null => {
     face: v.face ?? null,
     stats: { ...emptyStats(), ...(v.stats ?? {}) },
     dex: Array.isArray(v.dex) ? v.dex.filter((d): d is string => typeof d === 'string') : [v.species],
+    badges: isRecord(v.badges) ? numbersOf(v.badges) : {},
+    streak: isRecord(v.streak)
+      ? {
+          last: typeof v.streak.last === 'string' ? v.streak.last : null,
+          days: numberOr(v.streak.days, 0),
+          best: numberOr(v.streak.best, 0),
+        }
+      : { last: null, days: 0, best: 0 },
+    day: isRecord(v.day) && typeof v.day.date === 'string'
+      ? { ...emptyDay(v.day.date), ...numbersOf(v.day), date: v.day.date }
+      : emptyDay(''),
+    tics: isRecord(v.tics) ? numbersOf(v.tics) : {},
   }
 }
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
+const numberOr = (v: unknown, fallback: number): number =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : fallback
+
+const numbersOf = (v: object): Record<string, number> =>
+  Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === 'number' && Number.isFinite(n) && n >= 0))
 
 export const xpBar = (into: number, need: number, width: number): string => {
   const filled = need <= 0 ? width : Math.min(width, Math.round((into / need) * width))

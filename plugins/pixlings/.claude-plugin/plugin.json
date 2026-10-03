@@ -1,33 +1,58 @@
 {
   "name": "pixlings",
-  "version": "0.1.0",
-  "description": "Hatch a tiny pixel creature that lives above your Claude Code prompt. It reacts to tests, commits and risky commands, makes sounds on every OS, naps through your rate limit and wakes Claude when it resets.",
-  "author": { "name": "cglremrcn", "url": "https://github.com/cglremrcn" },
+  "version": "0.2.0",
+  "description": "Hatch a tiny pixel creature that lives above your Claude Code prompt. It reacts to tests, commits and risky commands, counts down your prompt cache, rolls its eyes at \"You're absolutely right\", earns badges, prints a shareable trading card, and naps through your rate limit, then wakes Claude when it resets.",
+  "author": {
+    "name": "cglremrcn",
+    "url": "https://github.com/cglremrcn"
+  },
   "homepage": "https://github.com/cglremrcn/pixlings",
   "repository": "https://github.com/cglremrcn/pixlings",
   "license": "MIT",
-  "keywords": ["mod", "companion", "pet", "buddy", "sound", "notifications", "rate-limit"],
+  "keywords": [
+    "mod",
+    "companion",
+    "pet",
+    "buddy",
+    "tamagotchi",
+    "sound",
+    "notifications",
+    "rate-limit",
+    "prompt-cache",
+    "badges"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "sound": {
       "type": "string",
       "title": "Sound",
       "description": "all: every reaction makes a sound. important: only when Claude needs you, finishes a long turn or hits the limit. off: silent.",
-      "options": ["all", "important", "off"],
+      "options": [
+        "all",
+        "important",
+        "off"
+      ],
       "default": "all"
     },
     "band": {
       "type": "string",
       "title": "Band above the prompt",
       "description": "full: the animated pixling. minimal: one line with a face. off: no band (sounds and notifications stay).",
-      "options": ["full", "minimal", "off"],
+      "options": [
+        "full",
+        "minimal",
+        "off"
+      ],
       "default": "full"
     },
     "chatter": {
       "type": "string",
       "title": "Chattiness",
       "description": "normal: it comments on what happens. quiet: only on failures, danger and when it needs you.",
-      "options": ["normal", "quiet"],
+      "options": [
+        "normal",
+        "quiet"
+      ],
       "default": "normal"
     },
     "notifications": {
@@ -41,6 +66,46 @@
       "title": "Continue after the usage limit resets",
       "description": "When the usage limit resets, the pixling wakes up and tells Claude to carry on.",
       "default": true
+    },
+    "vitals": {
+      "type": "boolean",
+      "title": "Vitals row",
+      "description": "Show the prompt cache countdown, cache hit rate, context fill and rate-limit windows under the pixling.",
+      "default": true
+    },
+    "cacheWarning": {
+      "type": "boolean",
+      "title": "Cache cooling warning",
+      "description": "A minute before the prompt cache expires, the pixling tells you (with a tick-tock) so a reply in time saves re-sending the whole context.",
+      "default": true
+    },
+    "cacheTtl": {
+      "type": "string",
+      "title": "Prompt cache lifetime",
+      "description": "auto: assume five minutes until a request proves an hour. 5m or 1h: use that.",
+      "options": [
+        "auto",
+        "5m",
+        "1h"
+      ],
+      "default": "auto"
+    },
+    "roam": {
+      "type": "boolean",
+      "title": "Walk around",
+      "description": "When Claude is idle the pixling strolls along the free columns of the band.",
+      "default": true
+    },
+    "voice": {
+      "type": "string",
+      "title": "Voice",
+      "description": "babble: chiptune gibberish as it talks. speech: it reads its lines aloud with the system voice. off: no voice (event sounds stay).",
+      "options": [
+        "babble",
+        "speech",
+        "off"
+      ],
+      "default": "babble"
     }
   }
 }

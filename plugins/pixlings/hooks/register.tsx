@@ -1,22 +1,42 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, Register, Timer } from 'claude-code'
 
-import type { PixlingsBubble, PixlingsNap, PixlingsView } from '../types'
+import type { PixlingsBubble, PixlingsCache, PixlingsNap, PixlingsVital, PixlingsView } from '../types'
+import { award, BADGES, countDay, earnedBadges, localDate, recapLine, touchDay } from './lib/badges.ts'
 import { baseMood, holdFor, moodNow, PRIORITY, react, speak } from './lib/brain.ts'
 import type { Bubble, Held } from './lib/brain.ts'
-import { HATCH_MS, renderFrame, renderHatch, renderSilhouette, samePixels } from './lib/canvas.ts'
+import { CARD_BG, CARD_SCALE, renderCard, shareText } from './lib/card.ts'
+import { CANVAS_W, HATCH_MS, renderFrame, renderHatch, renderSilhouette, samePixels, SPRITE_X } from './lib/canvas.ts'
 import type { Face, Hat, Icon, Mood, Pixels } from './lib/canvas.ts'
 import { blockingWindow, clockTime, formatDuration, iconFor, isTestCommand, riskOf, testOutcome } from './lib/detect.ts'
 import type { LimitWindow, Risk } from './lib/detect.ts'
 import { say } from './lib/lines.ts'
 import type { LineKey, Slots } from './lib/lines.ts'
-import { assetPath, linuxPlayer, notificationArgv, platformOfUname, windowsPlayer } from './lib/platform.ts'
+import {
+  assetPath,
+  linuxPlayer,
+  linuxSpeaker,
+  notificationArgv,
+  openArgv,
+  platformOfUname,
+  speakable,
+  windowsPlayer,
+  windowsSpeech,
+  writeBytesArgv,
+} from './lib/platform.ts'
 import type { Platform, Player } from './lib/platform.ts'
+import { encodePng } from './lib/png.ts'
 import { bump, daysTogether, gain, gearOf, hatchPixling, levelOf, revive, UNLOCKS, xpBar } from './lib/progress.ts'
-import type { Pixling, Stats, XpEvent } from './lib/progress.ts'
-import { rasterOf, toSvg } from './lib/raster.ts'
+import type { Day, Pixling, Stats, XpEvent } from './lib/progress.ts'
+import { base64, rasterOf, toSvg } from './lib/raster.ts'
+import { isWalking, newWalker, roamRange, walk } from './lib/roam.ts'
+import type { RoamMode, Walker } from './lib/roam.ts'
 import { RARITY_COLOR, RARITY_STARS, SPECIES, speciesById } from './lib/sprites.ts'
 import type { Species } from './lib/sprites.ts'
+import { addTics, isEyeRoll, ticsIn, topTics } from './lib/tics.ts'
+import type { Tic } from './lib/tics.ts'
+import { freshCache, hitPercent, observe, remainingMs, tokens, vitals } from './lib/vitals.ts'
+import type { Cache, RequestUsage, Ttl } from './lib/vitals.ts'
 
 /** The elements the band and the card share across surfaces. */
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
@@ -26,9 +46,15 @@ const bubbleAtom = atom({ plugin: 'pixlings', key: 'bubble' } as const, null as 
 const napAtom = atom({ plugin: 'pixlings', key: 'nap' } as const, null as PixlingsNap)
 const hatchAtom = atom({ plugin: 'pixlings', key: 'hatchAt' } as const, null as number | null)
 const moodAtom = atom({ plugin: 'pixlings', key: 'mood' } as const, 'idle')
+const vitalsAtom = atom({ plugin: 'pixlings', key: 'vitals' } as const, [] as PixlingsVital[])
+const cacheAtom = atom({ plugin: 'pixlings', key: 'cache' } as const, null as PixlingsCache)
 
 const STORE_KEY = 'pixling'
 const SEEN_KEY = 'lastSeen'
+const TTL_KEY = 'cacheTtl'
+/** The cache warning comes this long before it expires, and only over a context worth saving. */
+const COOLING_WARN_MS = 60_000
+const MIN_WARN_CONTEXT = 20_000
 const RASTER_KEY = 'pixling'
 const FRAME_MS = 100
 const DOZE_AFTER_MS = 15 * 60_000
@@ -49,7 +75,19 @@ const FACES: Readonly<Record<Mood, string>> = {
   sleep: '(-ᴗ-)zz',
   love: '(♡ᴗ♡)',
   dizzy: '(@_@)',
+  walk: '(•ᴗ•)♪',
+  unimpressed: '(¬_¬)',
 }
+
+const TONE_COLOR: Readonly<Record<PixlingsVital['tone'], string | undefined>> = {
+  good: '#6fdc8c',
+  warn: '#ffc53d',
+  bad: '#ff5f5f',
+  cold: '#7fd3ff',
+  dim: undefined,
+}
+
+const isTtl = (value: unknown): value is Ttl => value === '5m' || value === '1h'
 
 const hex = (color: number): string => `#${color.toString(16).padStart(6, '0')}`
 
@@ -91,6 +129,14 @@ type Io = {
   blit: (requestId: string, cells: string) => Promise<boolean>
   usage: () => Promise<readonly LimitWindow[]>
   submit: (text: string) => Promise<void>
+  setVitals: (value: PixlingsVital[]) => Promise<void>
+  setCache: (value: Cache) => Promise<void>
+  saveTtl: (ttl: Ttl) => Promise<void>
+  /** The prompt box's draft: a person typing is about to reply anyway. */
+  draft: () => Promise<string>
+  /** macOS's own voice, through the engine. */
+  speak: (text: string) => Promise<void>
+  pipe: (argv: string[], stdin: string, timeoutMs: number) => Promise<void>
 }
 
 export const register: Register = (on, options) => {
@@ -99,6 +145,11 @@ export const register: Register = (on, options) => {
   const chatter = String(options['chatter'] ?? 'normal')
   const wantsNotifications = options['notifications'] !== false
   const wantsAutoContinue = options['autoContinue'] !== false
+  const wantsVitals = options['vitals'] !== false
+  const wantsCacheWarning = options['cacheWarning'] !== false
+  const ttlSetting = String(options['cacheTtl'] ?? 'auto')
+  const wantsRoam = options['roam'] !== false
+  const voiceMode = String(options['voice'] ?? 'babble')
 
   // The engine's clock is the one timers run on; Date.now() is synced to it every second so
   // reading the time stays synchronous (a frame is drawn ten times a second).
@@ -144,6 +195,16 @@ export const register: Register = (on, options) => {
   let warnedWindows = new Set<string>()
   let lastMoodShown: Mood = 'idle'
   let saveTimer: Timer | null = null
+  let cache: Cache = freshCache()
+  let isTtlPinned = false
+  let contextPercent: number | null = null
+  let limits: readonly LimitWindow[] = []
+  let warnedCacheAt: number | null = null
+  let lastVitals = ''
+  let walker: Walker | null = null
+  let bandColumns = 0
+  let speaker: ((text: string) => string[]) | null = null
+  let lastSpokenAt = 0
 
   const species = (): Species => (pixling && speciesById(pixling.species)) || SPECIES[0]!
 
@@ -154,6 +215,7 @@ export const register: Register = (on, options) => {
     const port = io
     saveTimer = port.after(400, () => {
       saveTimer = null
+      void checkBadges()
       if (pixling) void port.save(pixling).catch(() => undefined)
     })
   }
@@ -212,6 +274,38 @@ export const register: Register = (on, options) => {
     play(`babble-${species().voice}-${size}`)
   }
 
+  /** Reads a line aloud with the system voice; false when there is no voice to read it. */
+  const speakLine = (text: string, delayMs: number): boolean => {
+    const port = io
+    if (!port || soundMode === 'off') return true
+    const at = now()
+    if (at - lastSpokenAt < 4000) return true
+    const line = speakable(text)
+    const reader = speaker
+    const speaking: (() => Promise<unknown>) | null =
+      platform === 'mac'
+        ? () => port.speak(line)
+        : platform === 'windows' || platform === 'wsl'
+          ? () => port.pipe(windowsSpeech(), line, 20_000)
+          : reader
+            ? () => port.run(reader(line), 20_000)
+            : null
+    if (!speaking || !line) return false
+    lastSpokenAt = at
+    port.after(delayMs, () => {
+      void Promise.resolve()
+        .then(speaking)
+        .catch(() => undefined)
+    })
+    return true
+  }
+
+  const voice = (text: string, priority: number, hasSound: boolean): void => {
+    if (voiceMode === 'off') return
+    if (voiceMode === 'speech' && priority >= PRIORITY.done && speakLine(text, hasSound ? 800 : 0)) return
+    if (!hasSound) babble(text)
+  }
+
   // Expression ----------------------------------------------------------------------------
 
   const currentMood = (at: number): { mood: Mood; since: number } => {
@@ -253,7 +347,7 @@ export const register: Register = (on, options) => {
         bubbleId += 1
         const id = bubbleId
         await port.setBubble({ text, id })
-        if (!r.sound) babble(text)
+        voice(text, r.priority, r.sound !== undefined)
         port.after(spoken.until - at, () => {
           if (bubbleId === id) {
             bubble = null
@@ -295,6 +389,44 @@ export const register: Register = (on, options) => {
     }
   }
 
+  const tally = (field: Exclude<keyof Day, 'date' | 'xp'>): void => {
+    if (pixling) {
+      pixling = countDay(pixling, field)
+      persist()
+    }
+  }
+
+  const isHatching = (at: number): boolean => hatchAt !== null && at - hatchAt < HATCH_MS + 2600
+
+  const checkBadges = async (): Promise<void> => {
+    const port = io
+    if (!port || !pixling || isHatching(now())) return
+    const { pixling: next, earned } = award(pixling, now())
+    const [first] = earned
+    if (!first) return
+    pixling = next
+    void port.save(next).catch(() => undefined)
+    await express({
+      mood: 'celebrate',
+      priority: PRIORITY.celebrate,
+      holdMs: 3500,
+      line: 'badge',
+      slots: { item: `${first.emoji} ${first.name}` },
+      sound: 'badge',
+    })
+    const more = earned.length > 1 ? ` (+${earned.length - 1} more)` : ''
+    port.toast(`🏅 Badge: ${first.emoji} ${first.name}, ${first.how.toLowerCase()}${more}. See /pixling badges`, 8000)
+  }
+
+  /** The pixling's first look at today: moves the streak, and hands back yesterday's work once. */
+  const greetDay = (): Day | null => {
+    if (!pixling) return null
+    const day = touchDay(pixling, now())
+    pixling = day.pixling
+    if (day.isNewDay) persist()
+    return day.recap
+  }
+
   const touch = async (): Promise<void> => {
     const at = now()
     const away = at - lastActivity
@@ -318,7 +450,116 @@ export const register: Register = (on, options) => {
     }
     const { mood, since } = currentMood(at)
     const activeIcon = icon && at < icon.until ? icon.icon : null
-    return renderFrame({ species: s, isShiny: p?.isShiny ?? false, mood, t: at - since, hat, face, icon: activeIcon })
+    const range = rangeNow()
+    const w = walker
+    const isStepping = w !== null && isWalking(w) && (mood === 'idle' || mood === 'working')
+    return renderFrame({
+      species: s,
+      isShiny: p?.isShiny ?? false,
+      mood: isStepping ? 'walk' : mood,
+      t: isStepping ? at : at - since,
+      hat,
+      face,
+      icon: activeIcon,
+      width: CANVAS_W + range,
+      x: SPRITE_X + Math.min(w?.x ?? range, range),
+      isFlipped: isStepping ? (w?.isFlipped ?? false) : false,
+    })
+  }
+
+  /** Columns the pixling may walk: the band's width past the canvas and the speech bubble. */
+  const rangeNow = (): number =>
+    wantsRoam && bandMode === 'full' && !isHatching(now()) ? roamRange(bandColumns) : 0
+
+  const roam = (at: number): void => {
+    const range = rangeNow()
+    if (!walker) walker = newWalker(range, at)
+    const { mood } = currentMood(at)
+    const isHeld = held !== null && at < held.until
+    const mode: RoamMode = nap || mood === 'sleep' || isHeld ? 'stay' : isWorking ? 'home' : 'wander'
+    walker = walk(walker, range, mode, at, Math.random)
+  }
+
+  // Vitals --------------------------------------------------------------------------------
+
+  const refreshVitals = async (at: number): Promise<void> => {
+    const port = io
+    if (!port || !wantsVitals) return
+    const pieces = vitals({ cache, now: at, isWorking, contextPercent, limits })
+    const key = pieces.map(v => `${v.text}:${v.tone}`).join('|')
+    if (key !== lastVitals) {
+      lastVitals = key
+      await port.setVitals(pieces)
+    }
+    await warnCooling(at)
+  }
+
+  /** A minute before the cache expires over a sizable context, the pixling taps the glass. */
+  const warnCooling = async (at: number): Promise<void> => {
+    const port = io
+    const left = remainingMs(cache, at)
+    if (!port || !wantsCacheWarning || isWorking || nap || left === null || left <= 0 || left > COOLING_WARN_MS) return
+    if (cache.lastAt === warnedCacheAt || cache.context < MIN_WARN_CONTEXT) return
+    warnedCacheAt = cache.lastAt
+    const draft = await port.draft().catch(() => '')
+    if (draft.trim() !== '') return
+    await express({
+      mood: 'attention',
+      priority: PRIORITY.commit,
+      holdMs: 5000,
+      line: 'cacheCooling',
+      slots: { dur: formatDuration(left) },
+      sound: 'clock',
+    })
+  }
+
+  /** What one main-thread request taught: the cache's state, and the model's verbal tics. */
+  const afterStep = async (usage: RequestUsage | null, answer: string, sentAt: number): Promise<void> => {
+    const port = io
+    if (!port || !pixling) return
+    if (usage) {
+      const { cache: seen, news } = observe(cache, usage, sentAt, isTtlPinned)
+      cache = seen
+      await port.setCache(cache)
+      if (news?.kind === 'learned') {
+        await port.saveTtl(news.ttl).catch(() => undefined)
+        await express({
+          priority: PRIORITY.ambient,
+          line: 'cacheLearned',
+          slots: { item: news.ttl === '1h' ? 'an hour' : 'five minutes' },
+        })
+      } else if (news?.kind === 'cold') {
+        count('coldStarts')
+        await express({
+          mood: 'sad',
+          priority: PRIORITY.commit,
+          holdMs: 2600,
+          line: 'cacheCold',
+          slots: { n: tokens(news.rewritten), dur: formatDuration(news.gapMs) },
+          sound: 'freeze',
+        })
+      }
+    }
+    if (answer) await hearTics(answer)
+  }
+
+  const hearTics = async (text: string): Promise<void> => {
+    if (!pixling) return
+    const found = ticsIn(text)
+    const kinds = Object.keys(found) as Tic[]
+    if (kinds.length === 0) return
+    pixling = { ...pixling, tics: addTics(pixling.tics, found) }
+    persist()
+    const roll = kinds.find(isEyeRoll)
+    if (!roll) return
+    await express({
+      mood: 'unimpressed',
+      priority: PRIORITY.commit,
+      holdMs: 2600,
+      line: roll,
+      slots: { n: pixling.tics[roll] ?? 1 },
+      sound: 'eyeroll',
+    })
   }
 
   const tick = async (): Promise<void> => {
@@ -327,13 +568,15 @@ export const register: Register = (on, options) => {
     ticks += 1
     if (ticks % 10 === 0) await syncClock(port)
     const t = now()
+    if (ticks % 10 === 1) await refreshVitals(t)
     if (bandMode === 'minimal') {
       await syncMinimal()
       return
     }
+    roam(t)
     const frame = frameAt(t)
     if (samePixels(lastFrame, frame)) return
-    const hasResized = lastFrame !== null && lastFrame.h !== frame.h
+    const hasResized = lastFrame !== null && (lastFrame.h !== frame.h || lastFrame.w !== frame.w)
     lastFrame = frame
     if (hasResized) {
       port.invalidate()
@@ -358,7 +601,7 @@ export const register: Register = (on, options) => {
   const hatch = async (dex: readonly string[] = []): Promise<void> => {
     const port = io
     if (!port) return
-    pixling = bump(hatchPixling(Math.random, now(), dex), 'sessions')
+    pixling = touchDay(bump(hatchPixling(Math.random, now(), dex), 'sessions'), now()).pixling
     await port.save(pixling)
     const s = species()
     const tier = s.rarity === 'legendary' ? 3 : s.rarity === 'rare' || s.rarity === 'epic' ? 2 : 1
@@ -479,6 +722,7 @@ export const register: Register = (on, options) => {
       })
     } else if (lastTest === 'fail') {
       count('bugsSquashed')
+      tally('squashed')
       await express({
         mood: 'celebrate',
         priority: PRIORITY.celebrate,
@@ -499,6 +743,7 @@ export const register: Register = (on, options) => {
       })
       await grant('testPass', 'testsPassed')
     }
+    if (outcome.status === 'pass') tally('tests')
     lastTest = outcome.status
   }
 
@@ -519,6 +764,7 @@ export const register: Register = (on, options) => {
       await grant('push', 'pushes')
     } else if (git?.commit || /\bgit\s+commit\b/.test(command)) {
       await express({ mood: 'happy', priority: PRIORITY.commit, line: 'commit', sound: 'commit' })
+      tally('commits')
       await grant('commit', 'commits')
     }
   }
@@ -536,6 +782,9 @@ export const register: Register = (on, options) => {
       player = soundRoot ? { kind: 'argv', argv: windowsPlayer } : { kind: 'none' }
     } else if (platform === 'linux') {
       player = linuxPlayer(await port.run(['sh', '-c', 'command -v paplay || command -v pw-play || command -v aplay'], 5000))
+      if (voiceMode === 'speech') {
+        speaker = linuxSpeaker(await port.run(['sh', '-c', 'command -v spd-say || command -v espeak-ng || command -v espeak'], 5000))
+      }
     }
   }
 
@@ -572,6 +821,22 @@ export const register: Register = (on, options) => {
       submit: async text => {
         await $.prompt.submit({ text })
       },
+      setVitals: async value => {
+        await update($, vitalsAtom, () => value)
+      },
+      setCache: async value => {
+        await update($, cacheAtom, () => value)
+      },
+      saveTtl: async ttl => {
+        await $.store.set(TTL_KEY, ttl)
+      },
+      draft: async () => (await $.prompt.read()).text,
+      speak: async text => {
+        await $.audio.speak(text)
+      },
+      pipe: async (argv, stdin, timeoutMs) => {
+        await $.process.run(argv, { stdin, timeoutMs })
+      },
     }
     io = port
     await syncClock(port)
@@ -585,6 +850,14 @@ export const register: Register = (on, options) => {
     } catch {
       player = { kind: 'none' }
     }
+
+    // The cache's lifetime: the person's setting, else what a past session learned, else 5m.
+    const learned = await $.store.get(TTL_KEY)
+    isTtlPinned = isTtl(ttlSetting)
+    const ttl: Ttl = isTtl(ttlSetting) ? ttlSetting : isTtl(learned) ? learned : '5m'
+    const isKnown = isTtlPinned || isTtl(learned)
+    const cacheNow = await read($, cacheAtom)
+    cache = cacheNow ? { ...cacheNow, ttl, isTtlKnown: isKnown || cacheNow.isTtlKnown } : freshCache(ttl, isKnown)
 
     const stored = revive(await $.store.get(STORE_KEY))
     const lastSeen = Number((await $.store.get(SEEN_KEY)) ?? 0)
@@ -611,17 +884,30 @@ export const register: Register = (on, options) => {
       await hatch()
     } else {
       pixling = bump(stored, 'sessions')
+      const recap = greetDay()
       await publishView()
       await grant('session')
       const away = lastSeen > 0 ? now() - lastSeen : 0
       if (hatchAt === null) {
-        await express({
-          mood: 'happy',
-          priority: PRIORITY.ambient,
-          holdMs: 2500,
-          line: away > 8 * 3_600_000 ? 'welcomeBack' : 'hello',
-          slots: { dur: formatDuration(away) },
-        })
+        if (recap) {
+          await express({
+            mood: 'happy',
+            priority: PRIORITY.ambient,
+            holdMs: 7000,
+            line: 'recap',
+            slots: { label: recapLine(recap, localDate(now())) },
+          })
+        } else {
+          await express({
+            mood: 'happy',
+            priority: PRIORITY.ambient,
+            holdMs: 2500,
+            line: away > 8 * 3_600_000 ? 'welcomeBack' : 'hello',
+            slots: { dur: formatDuration(away) },
+          })
+        }
+        const streak = pixling.streak.days
+        if (recap && streak >= 2) port.toast(`🔥 Day ${streak} in a row with ${pixling.name}. Keep it going!`, 7000)
       }
     }
     return next(e)
@@ -651,6 +937,16 @@ export const register: Register = (on, options) => {
     turnVerb = s.verbs[Math.floor(Math.random() * s.verbs.length)] ?? null
     turnPast = s.past[Math.floor(Math.random() * s.past.length)] ?? null
     return next(e)
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    const sentAt = now()
+    const result = yield* next(e)
+    if (e.agentId === undefined && pixling) {
+      // The pixling watches; it never breaks a turn.
+      await afterStep(result.usage, result.answer, sentAt).catch(() => undefined)
+    }
+    return result
   })
 
   on('tool.call', async ($, e, next) => {
@@ -684,6 +980,9 @@ export const register: Register = (on, options) => {
     icon = null
     switch (e.reason) {
       case 'answer': {
+        greetDay()
+        tally('turns')
+        if (new Date(now()).getHours() < 5) count('nights')
         if (e.durationMs > LONG_TURN_MS) {
           await express({
             mood: 'happy',
@@ -758,6 +1057,8 @@ export const register: Register = (on, options) => {
   })
 
   on('session.measure', async ($, e, next) => {
+    contextPercent = e.context.percent ?? contextPercent
+    limits = e.rateLimits
     for (const w of e.rateLimits) {
       const key = `${w.kind}:${w.resetsAt ?? ''}`
       if (w.percentUsed >= 90 && w.percentUsed < 100 && !warnedWindows.has(key)) {
@@ -779,13 +1080,28 @@ export const register: Register = (on, options) => {
   const WEARABLES = UNLOCKS.map(u => u.hat ?? u.face).join('|')
   const HELP = [
     "/pixling — your pixling's card",
+    '/pixling share — save a trading card PNG to show it off',
+    '/pixling badges — the badges, earned and still to earn',
     '/pixling pet — pet it',
     '/pixling name <name> — rename it',
     `/pixling wear <${WEARABLES}|none> — change its look`,
     '/pixling dex — the species you have hatched',
     '/pixling hatch — release it and hatch a new egg (progress resets)',
-    'Sound, the band, notifications and auto-continue are in /config.',
+    'Sound, voice, the band, vitals, the cache warning and auto-continue are in /config.',
   ].join('\n')
+
+  const slug = (name: string): string =>
+    name
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, '-')
+      .replace(/^-+|-+$/g, '') || 'pixling'
+
+  const badgeLine = (b: (typeof BADGES)[number], p: Pixling): string => {
+    const [have, need] = b.progress(p)
+    const isEarned = p.badges[b.id] !== undefined
+    const state = isEarned ? 'earned' : `${xpBar(have, need, 10)} ${have}/${need}`
+    return `${isEarned ? b.emoji : '🔒'} ${b.name.padEnd(19)} ${state.padEnd(18)} ${b.how}`
+  }
 
   on('command.run', { command: 'pixling' }, async ($, e) => {
     if (!pixling) return { text: 'Your egg has not hatched yet.' }
@@ -794,7 +1110,41 @@ export const register: Register = (on, options) => {
     switch (sub.toLowerCase()) {
       case '':
       case 'card':
-        return { text: `${pixling.name} the ${species().name}, level ${levelOf(pixling.xp).level}.` }
+        return { text: `${pixling.name} the ${species().name}, level ${levelOf(pixling.xp).level}. /pixling share saves its card.` }
+      case 'badges': {
+        const p = pixling
+        return { text: [`Badges ${earnedBadges(p).length}/${BADGES.length}`, ...BADGES.map(b => badgeLine(b, p))].join('\n') }
+      }
+      case 'share': {
+        const p = pixling
+        const png = encodePng(renderCard(p, now()), CARD_SCALE, CARD_BG)
+        const home = platform === 'windows' ? await $.env.get('USERPROFILE') : await $.env.get('HOME')
+        if (!home) return { text: 'Could not find your home folder to save the card in.' }
+        const sep = platform === 'windows' ? '\\' : '/'
+        const path = `${home.replace(/[\\/]+$/, '')}${sep}pixling-${slug(p.name)}.png`
+        try {
+          const wrote = await $.process.run(writeBytesArgv(platform), {
+            stdin: base64(png),
+            env: { PIXLING_OUT: path },
+            timeoutMs: 30_000,
+          })
+          if (wrote.exitCode !== 0) return { text: `Could not save the card: ${wrote.stderr.trim() || `exit ${wrote.exitCode}`}` }
+        } catch (error) {
+          return { text: `Could not save the card: ${error instanceof Error ? error.message : String(error)}` }
+        }
+        const opener = openArgv(platform, path)
+        if (opener) void $.process.run(opener, { timeoutMs: 15_000 }).catch(() => undefined)
+        const post = shareText(p)
+        const copied = await $.ui.copy({ text: post }).catch(() => null)
+        await express({ mood: 'celebrate', priority: PRIORITY.celebrate, holdMs: 3000, line: 'share', sound: 'shutter' })
+        return {
+          text: [
+            `Saved ${p.name}'s card to ${path}${opener ? ' and opened it' : ''}.`,
+            copied?.isCopied ? 'A post to go with it is on your clipboard:' : 'A post to go with it:',
+            post,
+          ].join('\n'),
+        }
+      }
       case 'pet': {
         petsToday += 1
         count('pets')
@@ -857,7 +1207,9 @@ export const register: Register = (on, options) => {
     isWorking = e.props.isWorking
     const said = await read($, bubbleAtom)
     const napping = await read($, napAtom)
+    const pieces = wantsVitals ? await read($, vitalsAtom) : []
     await read($, hatchAtom)
+    bandColumns = e.props.bodyColumns
     const s = speciesById(v.speciesId) ?? SPECIES[0]!
     const color = hex(RARITY_COLOR[s.rarity])
     const at = now()
@@ -876,6 +1228,7 @@ export const register: Register = (on, options) => {
           <Text color={color}>{`${FACES[mood] ?? FACES.idle} `}</Text>
           <Text bold>{v.name}</Text>
           <Text dimColor>{` · Lv ${v.level}`}</Text>
+          {pieces[0] ? <Text color={TONE_COLOR[pieces[0].tone]} dimColor={pieces[0].tone === 'dim'}>{`  ${pieces[0].text}`}</Text> : null}
           {text ? <Text>{`  ${text}`}</Text> : null}
         </Box>
       )
@@ -906,6 +1259,15 @@ export const register: Register = (on, options) => {
             <Button key="cancel-nap" label="cancel auto-continue" plain onPress={() => void cancelNap()} />
           ) : null}
         </Box>
+        {pieces.length > 0 ? (
+          <Box flexDirection="row" flexWrap="wrap">
+            {pieces.map((piece, i) => (
+              <Text color={TONE_COLOR[piece.tone]} dimColor={piece.tone === 'dim'}>
+                {`${i > 0 ? ' · ' : ''}${piece.text}`}
+              </Text>
+            ))}
+          </Box>
+        ) : null}
       </Box>
     )
 
@@ -1001,10 +1363,17 @@ export const register: Register = (on, options) => {
     const { hat, face } = gearOf(p)
     const frame = renderFrame({ species: s, isShiny: p.isShiny, mood: 'happy', t: 0, hat, face })
     const st = p.stats
+    const earned = earnedBadges(p)
+    const heard = topTics(p.tics, 3)
+    const hit = hitPercent(cache)
     const lines = [
       `Tests passed ${st.testsPassed}   Bugs squashed ${st.bugsSquashed}   Commits ${st.commits}   PRs ${st.prs}`,
       `Turns ${st.turns}   Pushes ${st.pushes}   Naps ${st.naps}   Pets ${st.pets}   Close calls ${st.risky}`,
-      `${daysTogether(p, now())} day(s) together · ${st.sessions} sessions · dex ${p.dex.length}/${SPECIES.length}`,
+      `${daysTogether(p, now())} day(s) together · 🔥 streak ${p.streak.days} (best ${p.streak.best}) · ${st.sessions} sessions · dex ${p.dex.length}/${SPECIES.length}`,
+      `Badges ${earned.length}/${BADGES.length} ${earned.map(b => b.emoji).join(' ')}`,
+      ...(heard.length > 0 ? [`Heard: ${heard.map(t => `${t.label} ×${t.n}`).join(' · ')}`] : []),
+      `Prompt cache: ${hit === null ? 'no requests yet' : `${hit}% served from cache`} · lives ${cache.ttl === '1h' ? 'an hour' : '5 minutes'}${cache.isTtlKnown ? '' : ' (assumed)'} · ${cache.coldStarts} cold start(s) this session`,
+      '/pixling share saves this as a trading card · /pixling badges',
     ]
     const header = (Box: Kit['Box'], Text: Kit['Text']) => (
       <Box flexDirection="column" marginLeft={2} flexShrink={1}>
