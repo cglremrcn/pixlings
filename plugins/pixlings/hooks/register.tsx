@@ -21,6 +21,7 @@ import {
   platformOfUname,
   speakable,
   windowsPlayer,
+  wavPipeArgv,
   windowsSpeech,
   writeBytesArgv,
 } from './lib/platform.ts'
@@ -36,6 +37,7 @@ import type { Species } from './lib/sprites.ts'
 import { addTics, isEyeRoll, ticsIn, topTics } from './lib/tics.ts'
 import type { Tic } from './lib/tics.ts'
 import { freshCache, hitPercent, observe, remainingMs, tokens, vitals } from './lib/vitals.ts'
+import { animalese, durationMs, wavOf } from './lib/voice.ts'
 import type { Cache, RequestUsage, Ttl } from './lib/vitals.ts'
 
 /** The elements the band and the card share across surfaces. */
@@ -149,7 +151,7 @@ export const register: Register = (on, options) => {
   const wantsCacheWarning = options['cacheWarning'] !== false
   const ttlSetting = String(options['cacheTtl'] ?? 'auto')
   const wantsRoam = options['roam'] !== false
-  const voiceMode = String(options['voice'] ?? 'babble')
+  const voiceMode = String(options['voice'] ?? 'animalese')
 
   // The engine's clock is the one timers run on; Date.now() is synced to it every second so
   // reading the time stays synchronous (a frame is drawn ten times a second).
@@ -205,6 +207,8 @@ export const register: Register = (on, options) => {
   let bandColumns = 0
   let speaker: ((text: string) => string[]) | null = null
   let lastSpokenAt = 0
+  let voicePipe: string[] | null = null
+  let voiceUntil = 0
 
   const species = (): Species => (pixling && speciesById(pixling.species)) || SPECIES[0]!
 
@@ -241,11 +245,7 @@ export const register: Register = (on, options) => {
   const play = (id: string, isImportant = false): void => {
     const port = io
     if (!port || soundMode === 'off' || (soundMode === 'important' && !isImportant)) return
-    const at = now()
-    // Chatter never talks over a sound that means something.
-    const isChatter = id.startsWith('babble-')
-    if (isChatter && at - lastSoundAt < 1500) return
-    if (!isChatter) lastSoundAt = at
+    lastSoundAt = now()
     const asset = `sounds/${id}.wav`
     port.after(0, () => {
       const playing =
@@ -269,9 +269,23 @@ export const register: Register = (on, options) => {
     })
   }
 
-  const babble = (text: string): void => {
-    const size = text.length < 22 ? 's' : text.length < 42 ? 'm' : 'l'
-    play(`babble-${species().voice}-${size}`)
+  /**
+   * The line said in the pixling's own voice: synthesized for this line and played from memory.
+   * Chatter never talks over a sound that means something, nor over itself.
+   */
+  const chirp = (text: string): void => {
+    const port = io
+    const argv = voicePipe
+    if (!port || !argv || soundMode !== 'all') return
+    const at = now()
+    if (at - lastSoundAt < 1500 || at < voiceUntil) return
+    const pcm = animalese(text, species().voice)
+    if (pcm.length === 0) return
+    voiceUntil = at + durationMs(pcm) + latency()
+    const wav = base64(wavOf(pcm))
+    port.after(0, () => {
+      void port.pipe(argv, wav, 20_000).catch(() => undefined)
+    })
   }
 
   /** Reads a line aloud with the system voice; false when there is no voice to read it. */
@@ -303,7 +317,7 @@ export const register: Register = (on, options) => {
   const voice = (text: string, priority: number, hasSound: boolean): void => {
     if (voiceMode === 'off') return
     if (voiceMode === 'speech' && priority >= PRIORITY.done && speakLine(text, hasSound ? 800 : 0)) return
-    if (!hasSound) babble(text)
+    if (!hasSound) chirp(text)
   }
 
   // Expression ----------------------------------------------------------------------------
@@ -773,6 +787,7 @@ export const register: Register = (on, options) => {
 
   const choosePlayer = async (port: Io, root: string): Promise<void> => {
     soundRoot = root
+    voicePipe = wavPipeArgv(platform)
     if (platform === 'mac') {
       player = { kind: 'engine' }
     } else if (platform === 'windows') {
@@ -781,7 +796,9 @@ export const register: Register = (on, options) => {
       soundRoot = (await port.run(['wslpath', '-w', root], 5000)).trim()
       player = soundRoot ? { kind: 'argv', argv: windowsPlayer } : { kind: 'none' }
     } else if (platform === 'linux') {
-      player = linuxPlayer(await port.run(['sh', '-c', 'command -v paplay || command -v pw-play || command -v aplay'], 5000))
+      const found = await port.run(['sh', '-c', 'command -v paplay || command -v pw-play || command -v aplay'], 5000)
+      player = linuxPlayer(found)
+      voicePipe = wavPipeArgv(platform, found)
       if (voiceMode === 'speech') {
         speaker = linuxSpeaker(await port.run(['sh', '-c', 'command -v spd-say || command -v espeak-ng || command -v espeak'], 5000))
       }

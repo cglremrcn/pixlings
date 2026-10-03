@@ -144,3 +144,29 @@ export const speakable = (text: string): string =>
     .replace(/[*_`~<>[\]{}|\^]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
+
+/**
+ * A process that plays a WAV given on standard input as base64: the pixling's voice is made
+ * fresh for every line, so there is no file of the mod's to play.
+ */
+export const wavPipeArgv = (platform: Platform, linuxPlayer = ''): string[] | null => {
+  switch (platform) {
+    case 'windows':
+    case 'wsl':
+      return [
+        POWERSHELL,
+        ...PS_FLAGS,
+        '$b = [Convert]::FromBase64String([Console]::In.ReadToEnd()); (New-Object System.Media.SoundPlayer (New-Object System.IO.MemoryStream (,$b))).PlaySync()',
+      ]
+    case 'mac':
+      return ['sh', '-c', 'd=$(mktemp -d) && base64 --decode > "$d/v.wav" && afplay "$d/v.wav"; rm -rf "$d"']
+    case 'linux': {
+      const bin = linuxPlayer.trim().split('\n')[0]?.trim() ?? ''
+      if (!bin) return null
+      const play = bin.endsWith('aplay') ? `"${bin}" -q` : `"${bin}"`
+      return ['sh', '-c', `d=$(mktemp -d) && base64 --decode > "$d/v.wav" && ${play} "$d/v.wav"; rm -rf "$d"`]
+    }
+    case 'unknown':
+      return null
+  }
+}

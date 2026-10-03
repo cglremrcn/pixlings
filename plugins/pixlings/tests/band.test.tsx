@@ -345,4 +345,29 @@ describe('the band', () => {
     expect(raster?.props['columns']).toBe(22 + 30)
     await ui.unmount()
   })
+
+  test('a line without a sound of its own is said in the pixling’s voice, made for that line', async ($, on) => {
+    const { clock, ran } = host(on, DUCK)
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(10_000)
+    const before = ran.length
+    await $.command.run({ command: 'pixling', args: 'name Sir Quacks' } as never)
+    await clock.advance(50)
+    const said = ran.slice(before).find(r => r.argv.join(' ').includes('MemoryStream'))
+    // A WAV's "RIFF" header, base64: UklGR
+    expect(said?.init?.stdin?.startsWith('UklGR')).toBe(true)
+    await $.command.run({ command: 'pixling', args: 'name Sir Quacks' } as never)
+    await clock.advance(50)
+    // Still talking: the second line does not talk over the first.
+    expect(ran.slice(before).filter(r => r.argv.join(' ').includes('MemoryStream')).length).toBe(1)
+  })
+
+  test('voice off keeps it quiet', { options: { voice: 'off' } }, async ($, on) => {
+    const { clock, ran } = host(on, DUCK)
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(10_000)
+    await $.command.run({ command: 'pixling', args: 'name Sir Quacks' } as never)
+    await clock.advance(50)
+    expect(ran.some(r => r.argv.join(' ').includes('MemoryStream'))).toBe(false)
+  })
 })

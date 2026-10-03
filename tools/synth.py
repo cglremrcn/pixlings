@@ -243,24 +243,6 @@ def hatch(tier: int) -> np.ndarray:
     return mix(y, fanfares[tier], 4.3)
 
 
-VOICES = {"high": (620.0, 0.0), "mid": (440.0, 0.0), "low": (250.0, 0.0), "wobble": (360.0, 0.06)}
-
-
-def babble(voice: str, syllables: int, seed: int) -> np.ndarray:
-    base, vib = VOICES[voice]
-    rng = np.random.default_rng(seed)
-    parts = []
-    for i in range(syllables):
-        semis = rng.choice([-3, -2, 0, 0, 2, 3, 5, 7])
-        f = base * 2 ** (semis / 12)
-        dur = rng.uniform(0.045, 0.075)
-        end = f * rng.choice([0.92, 1.0, 1.06])
-        syl = tone(f, dur, "square", duty=0.3, vol=0.5, slide_to=end, vibrato=vib, vibrato_hz=22, release=0.012)
-        syl += tone(f * 2, dur, "sine", vol=0.18, slide_to=end * 2, release=0.012)
-        parts += [soft(syl, 3800), silence(rng.uniform(0.018, 0.04) if i % 4 != 3 else 0.07)]
-    return seq(*parts)
-
-
 def s_clock() -> np.ndarray:
     """Tick-tock, tick-tock, then a soft chime: the prompt cache is about to cool."""
     tick = lambda f, seed: tone(f, 0.035, "sine", decay=0.012) + lowpass(noise(0.035, 0.35, 0.006, seed), 5000)  # noqa: E731
@@ -336,9 +318,6 @@ def main() -> None:
         "hatch-2": hatch(2),
         "hatch-3": hatch(3),
     }
-    for voice in VOICES:
-        for size, syllables in (("s", 5), ("m", 9), ("l", 14)):
-            sounds[f"babble-{voice}-{size}"] = babble(voice, syllables, seed=syllables * 31 + len(voice))
     for name, y in sounds.items():
         write(out / f"{name}.wav", y)
     total = sum((out / f"{n}.wav").stat().st_size for n in sounds)

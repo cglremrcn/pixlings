@@ -99,13 +99,13 @@
     "voice": {
       "type": "string",
       "title": "Voice",
-      "description": "babble: chiptune gibberish as it talks. speech: it reads its lines aloud with the system voice. off: no voice (event sounds stay).",
+      "description": "animalese: it says each line in its own made-up voice, a little syllable per letter at its species' pitch. speech: it reads its lines aloud with the system voice. off: no voice (event sounds stay).",
       "options": [
-        "babble",
+        "animalese",
         "speech",
         "off"
       ],
-      "default": "babble"
+      "default": "animalese"
     }
   }
 }

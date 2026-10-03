@@ -4,7 +4,7 @@
 
 export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
 
-export type Voice = 'high' | 'mid' | 'low' | 'wobble'
+export type Voice = 'high' | 'mid' | 'low' | 'wobble' | 'buzz'
 
 export type Point = readonly [x: number, y: number]
 
@@ -224,7 +224,7 @@ export const SPECIES: readonly Species[] = [
     mouth: [6, 7],
     cheeks: [],
     head: [8, 1],
-    voice: 'mid',
+    voice: 'buzz',
     verbs: ['Computing', 'Beep-booping', 'Allocating', 'Compiling feelings', 'Overclocking'],
     past: ['Computed', 'Beep-booped', 'Compiled'],
     blurb: 'Runs on coffee-flavored electricity. Its antenna blinks when it has an idea.',
