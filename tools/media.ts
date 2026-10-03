@@ -26,6 +26,8 @@ const MOODS: { mood: Mood; label: string }[] = [
   { mood: 'sleep', label: 'rate limit nap' },
   { mood: 'love', label: 'petted' },
   { mood: 'dizzy', label: 'API error' },
+  { mood: 'unimpressed', label: '"absolutely right"' },
+  { mood: 'walk', label: 'strolling' },
 ]
 
 const GEAR: { hat: Hat | null; label: string; shades?: boolean }[] = [
@@ -43,10 +45,10 @@ const clips: Clip[] = [
     name: 'moods',
     frames: 40,
     ms: 100,
-    columns: 5,
+    columns: 6,
     cells: MOODS.map(({ mood, label }) => ({
       label,
-      at: t => renderFrame({ species: species('blip'), isShiny: false, mood, t: t + (mood === 'alarmed' ? 0 : 0) }),
+      at: t => renderFrame({ species: species('blip'), isShiny: false, mood, t }),
     })),
   },
   {

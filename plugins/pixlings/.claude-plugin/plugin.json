@@ -26,7 +26,7 @@
     "sound": {
       "type": "string",
       "title": "Sound",
-      "description": "all: every reaction makes a sound. important: only when Claude needs you, finishes a long turn or hits the limit. off: silent.",
+      "description": "all: every reaction makes a sound. important: only when Claude needs you, finishes a long turn, runs something dangerous or hits the limit. off: silent.",
       "options": [
         "all",
         "important",

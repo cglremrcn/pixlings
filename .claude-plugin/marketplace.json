@@ -1,0 +1,26 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "pixlings",
+  "owner": {
+    "name": "cglremrcn",
+    "url": "https://github.com/cglremrcn"
+  },
+  "metadata": {
+    "description": "A pixel creature that lives above your Claude Code prompt and watches what Claude Code doesn't show you."
+  },
+  "plugins": [
+    {
+      "name": "pixlings",
+      "source": "./plugins/pixlings",
+      "description": "Hatch a tiny pixel creature that lives above your Claude Code prompt. It counts down your prompt cache, wakes Claude when your usage limit resets, makes sound on Windows and Linux, alarms before risky commands, and rolls its eyes at \"You're absolutely right\".",
+      "version": "0.2.0",
+      "author": {
+        "name": "cglremrcn",
+        "url": "https://github.com/cglremrcn"
+      },
+      "homepage": "https://github.com/cglremrcn/pixlings",
+      "category": "productivity",
+      "keywords": ["mod", "companion", "pet", "tamagotchi", "prompt-cache", "rate-limit", "sound", "notifications"]
+    }
+  ]
+}
