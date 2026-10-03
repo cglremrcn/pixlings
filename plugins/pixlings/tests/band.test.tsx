@@ -181,6 +181,16 @@ describe('the band', () => {
     await ui.unmount()
   })
 
+  test('a fresh session is awake, not dozing', { options: { band: 'minimal' } }, async ($, on) => {
+    const { clock } = host(on, DUCK)
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(5000)
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /zz/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /\(•ᴗ•\)/ })).toBeDefined()
+    await ui.unmount()
+  })
+
   test('every species can be the stored pixling', async ($, on) => {
     host(on, null)
     for (const s of SPECIES) {

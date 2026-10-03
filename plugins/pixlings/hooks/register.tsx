@@ -358,7 +358,7 @@ export const register: Register = (on, options) => {
   const hatch = async (dex: readonly string[] = []): Promise<void> => {
     const port = io
     if (!port) return
-    pixling = hatchPixling(Math.random, now(), dex)
+    pixling = bump(hatchPixling(Math.random, now(), dex), 'sessions')
     await port.save(pixling)
     const s = species()
     const tier = s.rarity === 'legendary' ? 3 : s.rarity === 'rare' || s.rarity === 'epic' ? 2 : 1
@@ -574,6 +574,9 @@ export const register: Register = (on, options) => {
       },
     }
     io = port
+    await syncClock(port)
+    lastActivity = now()
+    baseSince = now()
 
     const os = await $.env.get('OS')
     try {
