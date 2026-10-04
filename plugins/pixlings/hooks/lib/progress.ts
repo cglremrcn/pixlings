@@ -119,6 +119,14 @@ export const hatchPixling = (random: () => number, now: number, dex: readonly st
   }
 }
 
+/** A new egg for the same person: the badges, streak, tics and dex are theirs and stay. */
+export const rehatch = (p: Pixling, random: () => number, now: number): Pixling => ({
+  ...hatchPixling(random, now, p.dex),
+  badges: p.badges,
+  streak: p.streak,
+  tics: p.tics,
+})
+
 // Experience ------------------------------------------------------------------------------------
 
 export const XP = {
@@ -225,6 +233,77 @@ export const revive = (value: unknown): Pixling | null => {
       ? { ...emptyDay(v.day.date), ...numbersOf(v.day), date: v.day.date }
       : emptyDay(''),
     tics: isRecord(v.tics) ? numbersOf(v.tics) : {},
+  }
+}
+
+/** A stored value that is there but is no pixling this version can read: never to be written over. */
+export const isUnreadable = (value: unknown): boolean => value !== undefined && value !== null && revive(value) === null
+
+// Saving ----------------------------------------------------------------------------------------
+// Every session keeps the pixling it loaded (its base) and saves by folding what it changed since
+// into what the store holds now, so two terminals never overwrite each other's progress.
+
+/** `stored` moved on by what `ours` added since `base`, per key, never below zero. */
+const moved = <K extends string>(
+  stored: Partial<Record<K, number>>,
+  base: Partial<Record<K, number>>,
+  ours: Partial<Record<K, number>>,
+): Partial<Record<K, number>> => {
+  const out: Partial<Record<K, number>> = { ...stored }
+  for (const key of Object.keys(ours) as K[]) {
+    const by = (ours[key] ?? 0) - (base[key] ?? 0)
+    if (by !== 0) out[key] = Math.max(0, (stored[key] ?? 0) + by)
+  }
+  return out
+}
+
+/** The later `last` wins; on the same day, the longer run. The best is the best either saw. */
+const laterStreak = (a: Streak, b: Streak): Streak => {
+  const [x, y] = [a.last ?? '', b.last ?? '']
+  const later = x > y ? a : y > x ? b : a.days >= b.days ? a : b
+  return { ...later, best: Math.max(a.best, b.best, later.days) }
+}
+
+const DAY_COUNTS = ['turns', 'commits', 'squashed', 'tests', 'xp'] as const
+
+/** Today's record: the newer date wins whole; on the same date, both sessions' counts add up. */
+const mergeDay = (stored: Day, base: Day, ours: Day): Day => {
+  if (ours.date !== stored.date) return ours.date > stored.date ? ours : stored
+  const since = base.date === ours.date ? base : emptyDay(ours.date)
+  const day = { ...stored }
+  for (const k of DAY_COUNTS) day[k] = Math.max(0, stored[k] + ours[k] - since[k])
+  return day
+}
+
+/**
+ * What to write when the store holds `stored`, this session loaded or last wrote `base` (null
+ * before its first save) and holds `ours` now. A different `hatchedAt` is another egg: the later
+ * hatch wins. Counters add up; name, hat and face are ours when we changed them; badges, the dex,
+ * the streak and the tics belong to the person and are merged across eggs.
+ */
+export const mergeSave = (stored: Pixling, base: Pixling | null, ours: Pixling): Pixling => {
+  const isSameEgg = stored.hatchedAt === ours.hatchedAt
+  // No base, yet the store holds this very egg: ours is the newer copy of it.
+  const since = base ?? (isSameEgg ? stored : null)
+  const badges = { ...stored.badges }
+  for (const [id, at] of Object.entries(ours.badges)) badges[id] = Math.min(at, badges[id] ?? at)
+  const person = {
+    dex: [...new Set([...stored.dex, ...ours.dex])],
+    badges,
+    streak: laterStreak(stored.streak, ours.streak),
+    tics: moved(stored.tics, since?.tics ?? {}, ours.tics),
+  }
+  if (!isSameEgg || !since) return { ...(stored.hatchedAt > ours.hatchedAt ? stored : ours), ...person }
+  const pick = <T>(theirs: T, was: T, now: T): T => (now === was ? theirs : now)
+  return {
+    ...stored,
+    name: pick(stored.name, since.name, ours.name),
+    hat: pick(stored.hat, since.hat, ours.hat),
+    face: pick(stored.face, since.face, ours.face),
+    xp: Math.max(0, stored.xp + ours.xp - since.xp),
+    stats: moved(stored.stats, since.stats, ours.stats) as Stats,
+    day: mergeDay(stored.day, since.day, ours.day),
+    ...person,
   }
 }
 

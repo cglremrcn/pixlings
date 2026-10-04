@@ -11,7 +11,8 @@ const psQuote = (s: string): string => `'${s.replace(/'/g, "''")}'`
 
 export const POWERSHELL = 'powershell.exe'
 
-const PS_FLAGS = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command'] as const
+// No `-ExecutionPolicy Bypass`: the policy governs script files, never `-Command`, and EDR tools flag it.
+const PS_FLAGS = ['-NoProfile', '-NonInteractive', '-Command'] as const
 
 export const windowsPlayer = (path: string): string[] => [
   POWERSHELL,
@@ -115,11 +116,15 @@ export const openArgv = (platform: Platform, path: string): string[] | null => {
   }
 }
 
-/** Speaks its standard input aloud in an English voice, through Windows' own synthesizer. */
+/**
+ * Speaks its standard input aloud in an English voice, through Windows' own synthesizer. Windows
+ * PowerShell reads standard input in the OEM code page; the text arrives as UTF-8.
+ */
 export const windowsSpeech = (): string[] => [
   POWERSHELL,
   ...PS_FLAGS,
   [
+    'try { [Console]::InputEncoding = [Text.Encoding]::UTF8 } catch {}',
     'Add-Type -AssemblyName System.Speech',
     '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
     "$v = $s.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like 'en*' } | Select-Object -First 1",
