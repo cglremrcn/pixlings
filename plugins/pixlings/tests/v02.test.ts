@@ -39,13 +39,15 @@ describe('the prompt cache', () => {
     expect(remainingMs(freshCache(), T0)).toBeNull()
   })
 
-  test('a hit after more than five minutes proves the hour-long TTL', () => {
+  test('two hits after more than five minutes prove the hour-long TTL', () => {
     const first = observe(freshCache(), usage(0), T0).cache
-    const { cache, news } = observe(first, usage(58_000), T0 + 7 * MIN)
+    const once = observe(first, usage(58_000), T0 + 7 * MIN)
+    expect(once.news).toBeNull()
+    const { cache, news } = observe(once.cache, usage(58_000), T0 + 14 * MIN)
     expect(news).toEqual({ kind: 'learned', ttl: '1h' })
     expect(cache.ttl).toBe('1h')
     expect(cache.isTtlKnown).toBe(true)
-    expect(remainingMs(cache, T0 + 8 * MIN)).toBe(59 * MIN)
+    expect(remainingMs(cache, T0 + 15 * MIN)).toBe(59 * MIN)
   })
 
   test('a miss after the timer ran out is a cold start, and proves the five-minute TTL', () => {
