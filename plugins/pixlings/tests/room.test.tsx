@@ -1,6 +1,7 @@
-import { describe, expect, mock, test } from 'claude-code/testing'
+import { describe, expect, mock } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 
+import { test } from './kit.ts'
 import { ROOM_ID } from '../hooks/lib/room.ts'
 import { SPECIES } from '../hooks/lib/sprites.ts'
 

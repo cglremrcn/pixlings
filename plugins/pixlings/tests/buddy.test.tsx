@@ -1,7 +1,8 @@
-import { describe, expect, mock, test } from 'claude-code/testing'
+import { describe, expect, mock } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { test } from './kit.ts'
 import { adopt, cleanName, companionOf, configPath, epochMs, readFileArgv, speciesNamed } from '../hooks/lib/buddy.ts'
 import { oneLine, personaFor, personasOf, TEMPLATE_MAX } from '../hooks/lib/persona.ts'
 import { daysTogether, hatchPixling, mergeSave, rehatch, revive } from '../hooks/lib/progress.ts'

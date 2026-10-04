@@ -1,7 +1,8 @@
-import { describe, expect, mock, test } from 'claude-code/testing'
+import { describe, expect, mock } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { test } from './kit.ts'
 import { CANVAS_W, layoutFor, MINI_LEAVE_MS, MINI_POOF_MS, MINI_SLOT, miniTint, mirror, renderFrame, renderMini, SPRITE_X, squadWidth, TRANSPARENT } from '../hooks/lib/canvas.ts'
 import type { Hat, MiniView, Mood, Pixels } from '../hooks/lib/canvas.ts'
 import { SPECIES } from '../hooks/lib/sprites.ts'

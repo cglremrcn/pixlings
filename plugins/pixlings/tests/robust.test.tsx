@@ -1,7 +1,8 @@
-import { describe, expect, mock, test } from 'claude-code/testing'
+import { describe, expect, mock } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { test } from './kit.ts'
 import { wavPipeArgv, windowsPlayer, windowsSpeech, windowsToast, writeBytesArgv } from '../hooks/lib/platform.ts'
 import { emptyDay, hatchPixling, isUnreadable, mergeSave, rehatch, revive } from '../hooks/lib/progress.ts'
 import type { Pixling } from '../hooks/lib/progress.ts'
@@ -31,6 +32,14 @@ const SLOW = {
   name: 'slow-frames',
   register: (on: On) => {
     on('clock.every', ($, e, next) => next({ ...e, ms: Math.max(e.ms, 60_000) }))
+  },
+}
+
+/** The same for a test that sleeps through days: a frame every half hour. */
+const SLOWER = {
+  name: 'slower-frames',
+  register: (on: On) => {
+    on('clock.every', ($, e, next) => next({ ...e, ms: Math.max(e.ms, 1_800_000) }))
   },
 }
 
@@ -155,7 +164,7 @@ const hhmm = (at: number): string => {
 }
 
 describe('the nap', () => {
-  test('a /clear during the nap cancels the auto-continue', async ($, on) => {
+  test('a /clear during the nap cancels the auto-continue', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted } = host(on, DUCK)
     const resetsAt = NOON + 5 * MIN
     usage(on, fullUntil(resetsAt))
@@ -169,7 +178,7 @@ describe('the nap', () => {
     expect(continues(submitted)).toEqual([])
   })
 
-  test('a nap never continues into another conversation than the one it fell asleep in', async ($, on) => {
+  test('a nap never continues into another conversation than the one it fell asleep in', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted, session } = host(on, DUCK)
     const resetsAt = NOON + 5 * MIN
     usage(on, fullUntil(resetsAt))
@@ -184,7 +193,7 @@ describe('the nap', () => {
     expect(continues(submitted)).toEqual([])
   })
 
-  test('the same conversation is still continued at the reset', async ($, on) => {
+  test('the same conversation is still continued at the reset', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted } = host(on, DUCK)
     const resetsAt = NOON + 5 * MIN
     usage(on, fullUntil(resetsAt))
@@ -196,7 +205,7 @@ describe('the nap', () => {
     expect(continues(submitted).length).toBe(1)
   })
 
-  test('a weekly limit days away names the day, and the reset is announced, not continued', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
+  test('a weekly limit days away names the day, and the reset is announced, not continued', { plugins: [SLOWER], timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted, ran } = host(on, DUCK)
     const resetsAt = Date.parse('2026-10-06T14:00:00Z')
     usage(on, [{ kind: 'seven_day', percentUsed: 100, resetsAt: new Date(resetsAt).toISOString() }])
@@ -215,7 +224,7 @@ describe('the nap', () => {
     expect(ran.some(r => r.argv.join(' ').includes('Your usage limit has reset'))).toBe(true)
   })
 
-  test('a prompt from Remote Control is the person: it cancels the auto-continue', { timeoutMs: LONG }, async ($, on) => {
+  test('a prompt from Remote Control is the person: it cancels the auto-continue', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted } = host(on, DUCK)
     const resetsAt = NOON + 5 * MIN
     usage(on, fullUntil(resetsAt))
@@ -229,7 +238,7 @@ describe('the nap', () => {
     expect(submitted).toEqual(['ok, now do the other thing'])
   })
 
-  test('a background task notification is not the person: the auto-continue stands', { timeoutMs: LONG }, async ($, on) => {
+  test('a background task notification is not the person: the auto-continue stands', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted } = host(on, DUCK)
     const resetsAt = NOON + 5 * MIN
     usage(on, fullUntil(resetsAt))
@@ -243,7 +252,7 @@ describe('the nap', () => {
     expect(continues(submitted).length).toBe(1)
   })
 
-  test('still limited at the planned reset: it sleeps on to the new one instead of claiming a reset', { timeoutMs: LONG }, async ($, on) => {
+  test('still limited at the planned reset: it sleeps on to the new one instead of claiming a reset', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted, ran } = host(on, DUCK)
     const first = NOON + 5 * MIN
     const later = NOON + 9 * MIN

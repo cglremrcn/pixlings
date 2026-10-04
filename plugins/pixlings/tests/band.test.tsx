@@ -1,11 +1,24 @@
-import { describe, expect, mock, test } from 'claude-code/testing'
+import { describe, expect, mock } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { test } from './kit.ts'
 import { SPECIES } from '../hooks/lib/sprites.ts'
 
 /** Tests that run minutes or days of clock: about a second alone, slower when suites share the CPU. */
 const LONG = 20_000
+
+/**
+ * Stretches the 100 ms frame clock to a minute for a test that skips minutes ahead and checks
+ * nothing that moves frame by frame (the pixling re-reads the clock every ten frames, so a
+ * cache countdown is one). An inline plugin sees nothing of this file but its body.
+ */
+const SLOW = {
+  name: 'slow-frames',
+  register: (on: On) => {
+    on('clock.every', ($, e, next) => next({ ...e, ms: Math.max(e.ms, 60_000) }))
+  },
+}
 
 const BAND = {
   plugin: 'pixlings',
@@ -182,7 +195,7 @@ describe('the band', () => {
     expect(ran.some(r => r.argv.join(' ').includes('ToastNotificationManager'))).toBe(true)
   })
 
-  test('a rate limit puts it to sleep and the reset wakes Claude', async ($, on) => {
+  test('a rate limit puts it to sleep and the reset wakes Claude', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const { clock, ran } = host(on, DUCK)
     const resetsAt = Date.parse('2026-10-03T12:05:00Z')
     const submitted: string[] = []
