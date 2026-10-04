@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, Register, Timer } from 'claude-code'
+import type { Elements, PromptOrigin, Register, Timer } from 'claude-code'
 
 import type { PixlingsBubble, PixlingsCache, PixlingsNap, PixlingsVital, PixlingsView } from '../types'
 import { award, BADGES, countDay, earnedBadges, localDate, recapLine, touchDay } from './lib/badges.ts'
@@ -27,9 +27,22 @@ import {
 } from './lib/platform.ts'
 import type { Platform, Player } from './lib/platform.ts'
 import { encodePng } from './lib/png.ts'
-import { bump, daysTogether, gain, gearOf, hatchPixling, levelOf, revive, UNLOCKS, xpBar } from './lib/progress.ts'
+import {
+  bump,
+  daysTogether,
+  gain,
+  gearOf,
+  hatchPixling,
+  isUnreadable,
+  levelOf,
+  mergeSave,
+  rehatch,
+  revive,
+  UNLOCKS,
+  xpBar,
+} from './lib/progress.ts'
 import type { Day, Pixling, Stats, XpEvent } from './lib/progress.ts'
-import { base64, rasterOf, toSvg } from './lib/raster.ts'
+import { base64, rasterOf, rowsFor, toSvg } from './lib/raster.ts'
 import { isWalking, newWalker, roamRange, walk } from './lib/roam.ts'
 import type { RoamMode, Walker } from './lib/roam.ts'
 import { RARITY_COLOR, RARITY_STARS, SPECIES, speciesById } from './lib/sprites.ts'
@@ -52,6 +65,8 @@ const vitalsAtom = atom({ plugin: 'pixlings', key: 'vitals' } as const, [] as Pi
 const cacheAtom = atom({ plugin: 'pixlings', key: 'cache' } as const, null as PixlingsCache)
 
 const STORE_KEY = 'pixling'
+/** Where a save this version cannot read is copied before the session runs without saving. */
+const BACKUP_KEY = 'pixlingBackup'
 const SEEN_KEY = 'lastSeen'
 const TTL_KEY = 'cacheTtl'
 /** The cache warning comes this long before it expires, and only over a context worth saving. */
@@ -63,8 +78,33 @@ const DOZE_AFTER_MS = 15 * 60_000
 const LONG_TURN_MS = 45_000
 const NAP_RETRY_MS = 20 * 60_000
 const NAP_GRACE_MS = 20_000
+/** Past this a nap's conversation is stale: the reset is announced, Claude is not continued. */
+const NAP_MAX_AGE_MS = 6 * 3_600_000
+/** Continue prompts tried when no reset time can be read (an API key's limits are unreported). */
+const NAP_MAX_RETRIES = 3
+/** A reset further off than this is a weekly one: its time is given with the day. */
+const FAR_RESET_MS = 20 * 3_600_000
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
 const CONTINUE_PROMPT =
   'The usage limit has reset. Please continue the task you were working on where you left off.'
+const RETRY_LINE = 'Trying again, in case the limit has reset...'
+const MAYBE_LINE = 'The limit may have reset by now.'
+const GIVE_UP_LINE = "I can't tell when the limit resets. Send a message when you're ready."
+const HATCH_LABEL = 'Hatch a new egg'
+
+/** Prompts no person sent: another plugin's, a background task's, a schedule's, another agent's. */
+const NOT_THE_PERSON: ReadonlySet<PromptOrigin['kind']> = new Set<PromptOrigin['kind']>([
+  'plugin',
+  'task-notification',
+  'scheduled-trigger',
+  'peer',
+  'peer-send-message',
+  'projects-relay',
+  'coordinator',
+  'observer',
+  'observer-activity',
+  'unclassified',
+])
 
 const FACES: Readonly<Record<Mood, string>> = {
   idle: '(•ᴗ•)',
@@ -99,6 +139,8 @@ type Reaction = {
   holdMs?: number
   line?: LineKey
   slots?: Slots
+  /** A line said as written, in place of one picked for `line`. */
+  text?: string
   sound?: string
   /** Plays under the "important" sound setting too, and wins over a held mood. */
   isImportant?: boolean
@@ -123,7 +165,12 @@ type Io = {
   setNap: (value: PixlingsNap) => Promise<void>
   setHatchAt: (value: number | null) => Promise<void>
   setMood: (value: Mood) => Promise<void>
+  /** The saved pixling as the store holds it now, which another session may have written. */
+  load: () => Promise<unknown>
   save: (value: Pixling) => Promise<void>
+  backup: (value: unknown) => Promise<void>
+  /** The conversation's id; null when it cannot be read. */
+  sessionId: () => Promise<string | null>
   run: (argv: string[], timeoutMs: number) => Promise<string>
   playAsset: (asset: string) => Promise<void>
   toast: (text: string, timeoutMs: number) => void
@@ -209,19 +256,75 @@ export const register: Register = (on, options) => {
   let lastSpokenAt = 0
   let voicePipe: string[] | null = null
   let voiceUntil = 0
+  /** A `-p` or SDK run: nobody watches, so nothing is shown, played or said; stats still count. */
+  let isQuiet = false
+  /** The pixling as this session loaded or last wrote it: what its own changes are counted from. */
+  let savedAs: Pixling | null = null
+  /** The store holds a save this version cannot read: it is left alone, nothing is written. */
+  let isReadOnly = false
+  let saving: Promise<void> = Promise.resolve()
+  /** The conversation a nap fell asleep in, and when: it continues only that one, and not late. */
+  let napSession: string | null = null
+  let napSince = 0
+  /** The band had too few rows for the sprite and drew one line instead. */
+  let isCramped = false
 
   const species = (): Species => (pixling && speciesById(pixling.species)) || SPECIES[0]!
 
   // Persistence ---------------------------------------------------------------------------
 
   const persist = (): void => {
-    if (!io || saveTimer) return
+    if (!io || saveTimer || isReadOnly) return
     const port = io
     saveTimer = port.after(400, () => {
       saveTimer = null
       void checkBadges()
-      if (pixling) void port.save(pixling).catch(() => undefined)
+      void commit()
     })
+  }
+
+  /**
+   * Saves by folding what this session changed into what the store holds now, since another
+   * terminal may have saved meanwhile. One save at a time; a save this version cannot read is
+   * never written over.
+   */
+  const commit = (): Promise<void> => {
+    saving = saving.then(writeSave).catch(() => undefined)
+    return saving
+  }
+
+  const writeSave = async (): Promise<void> => {
+    const port = io
+    if (!port || !pixling || isReadOnly) return
+    const raw = await port.load()
+    if (isUnreadable(raw)) {
+      await readOnly(raw)
+      return
+    }
+    const ours = pixling
+    const stored = revive(raw)
+    const merged = stored ? mergeSave(stored, savedAs, ours) : ours
+    await port.save(merged)
+    savedAs = merged
+    const shown = pixling
+    // What changed while the write was out is carried over onto what was written.
+    pixling = shown === ours ? merged : mergeSave(merged, ours, shown)
+    if (viewKey(pixling) !== viewKey(shown)) await publishView()
+  }
+
+  const viewKey = (p: Pixling): string => `${p.species}|${p.isShiny}|${p.name}|${p.xp}|${p.hat}|${p.face}`
+
+  /** A save this version cannot read (a newer version's, or damaged): copied aside, left alone. */
+  const readOnly = async (raw: unknown): Promise<void> => {
+    const port = io
+    if (!port || isReadOnly) return
+    isReadOnly = true
+    await port.backup(raw).catch(() => undefined)
+    toast(`Pixlings can't read its save (a newer version's?). It is left as it was, a copy kept as "${BACKUP_KEY}"; nothing is saved this session.`, 12_000)
+  }
+
+  const toast = (text: string, timeoutMs: number): void => {
+    if (io && !isQuiet) io.toast(text, timeoutMs)
   }
 
   const publishView = async (): Promise<void> => {
@@ -244,7 +347,7 @@ export const register: Register = (on, options) => {
 
   const play = (id: string, isImportant = false): void => {
     const port = io
-    if (!port || soundMode === 'off' || (soundMode === 'important' && !isImportant)) return
+    if (!port || isQuiet || soundMode === 'off' || (soundMode === 'important' && !isImportant)) return
     lastSoundAt = now()
     const asset = `sounds/${id}.wav`
     port.after(0, () => {
@@ -261,7 +364,7 @@ export const register: Register = (on, options) => {
 
   const notify = (body: string): void => {
     const port = io
-    if (!port || !wantsNotifications || !pixling) return
+    if (!port || isQuiet || !wantsNotifications || !pixling) return
     const argv = notificationArgv(platform, `${pixling.name} · Claude Code`, body)
     if (!argv) return
     port.after(0, () => {
@@ -314,9 +417,13 @@ export const register: Register = (on, options) => {
     return true
   }
 
-  const voice = (text: string, priority: number, hasSound: boolean): void => {
-    if (voiceMode === 'off') return
-    if (voiceMode === 'speech' && priority >= PRIORITY.done && speakLine(text, hasSound ? 800 : 0)) return
+  const voice = (text: string, priority: number, hasSound: boolean, isImportant: boolean): void => {
+    if (voiceMode === 'off' || isQuiet) return
+    if (voiceMode === 'speech') {
+      // Under the "important" sound setting only what matters is read aloud.
+      if (soundMode === 'important' && !isImportant) return
+      if (priority >= PRIORITY.done && speakLine(text, hasSound ? 800 : 0)) return
+    }
     if (!hasSound) chirp(text)
   }
 
@@ -336,7 +443,7 @@ export const register: Register = (on, options) => {
   }
 
   const syncMinimal = async (): Promise<void> => {
-    if (!io || bandMode !== 'minimal') return
+    if (!io || (bandMode !== 'minimal' && !isCramped)) return
     const { mood } = currentMood(now())
     if (mood !== lastMoodShown) {
       lastMoodShown = mood
@@ -353,15 +460,15 @@ export const register: Register = (on, options) => {
       if (next) held = next
       else if (!r.isImportant) return
     }
-    if (r.line && (chatter !== 'quiet' || r.priority >= PRIORITY.testFail)) {
-      const text = say(r.line, { name: pixling.name, ...r.slots }, pixling.species, Math.random)
+    if ((r.line || r.text) && (chatter !== 'quiet' || r.priority >= PRIORITY.testFail)) {
+      const text = r.text ?? (r.line ? say(r.line, { name: pixling.name, ...r.slots }, pixling.species, Math.random) : '')
       const spoken = speak(bubble, text, r.priority, holdFor(text), at)
       if (spoken) {
         bubble = spoken
         bubbleId += 1
         const id = bubbleId
         await port.setBubble({ text, id })
-        voice(text, r.priority, r.sound !== undefined)
+        voice(text, r.priority, r.sound !== undefined, r.isImportant === true)
         port.after(spoken.until - at, () => {
           if (bubbleId === id) {
             bubble = null
@@ -418,8 +525,8 @@ export const register: Register = (on, options) => {
     const { pixling: next, earned } = award(pixling, now())
     const [first] = earned
     if (!first) return
+    // Saved by the persist that called this, right after.
     pixling = next
-    void port.save(next).catch(() => undefined)
     await express({
       mood: 'celebrate',
       priority: PRIORITY.celebrate,
@@ -429,7 +536,7 @@ export const register: Register = (on, options) => {
       sound: 'badge',
     })
     const more = earned.length > 1 ? ` (+${earned.length - 1} more)` : ''
-    port.toast(`🏅 Badge: ${first.emoji} ${first.name}, ${first.how.toLowerCase()}${more}. See /pixling badges`, 8000)
+    toast(`🏅 Badge: ${first.emoji} ${first.name}, ${first.how.toLowerCase()}${more}. See /pixling badges`, 8000)
   }
 
   /** The pixling's first look at today: moves the streak, and hands back yesterday's work once. */
@@ -439,6 +546,14 @@ export const register: Register = (on, options) => {
     pixling = day.pixling
     if (day.isNewDay) persist()
     return day.recap
+  }
+
+  /** Yesterday's work in the bubble, and the streak in a toast. */
+  const showRecap = async (recap: Day, priority: number): Promise<void> => {
+    if (!pixling) return
+    await express({ mood: 'happy', priority, holdMs: 7000, line: 'recap', slots: { label: recapLine(recap, localDate(now())) } })
+    const streak = pixling.streak.days
+    if (streak >= 2) toast(`🔥 Day ${streak} in a row with ${pixling.name}. Keep it going!`, 7000)
   }
 
   const touch = async (): Promise<void> => {
@@ -505,7 +620,6 @@ export const register: Register = (on, options) => {
       lastVitals = key
       await port.setVitals(pieces)
     }
-    await warnCooling(at)
   }
 
   /** A minute before the cache expires over a sizable context, the pixling taps the glass. */
@@ -582,8 +696,12 @@ export const register: Register = (on, options) => {
     ticks += 1
     if (ticks % 10 === 0) await syncClock(port)
     const t = now()
-    if (ticks % 10 === 1) await refreshVitals(t)
-    if (bandMode === 'minimal') {
+    if (ticks % 10 === 1) {
+      // The warning is its own setting: neither the vitals row nor the band turns it off.
+      await refreshVitals(t)
+      await warnCooling(t)
+    }
+    if (bandMode === 'minimal' || isCramped) {
       await syncMinimal()
       return
     }
@@ -612,11 +730,12 @@ export const register: Register = (on, options) => {
   // PowerShell takes about half a second to start playing; start the animation with the sound.
   const latency = (): number => (platform === 'windows' || platform === 'wsl' ? 450 : 80)
 
-  const hatch = async (dex: readonly string[] = []): Promise<void> => {
+  const hatch = async (): Promise<void> => {
     const port = io
     if (!port) return
-    pixling = touchDay(bump(hatchPixling(Math.random, now(), dex), 'sessions'), now()).pixling
-    await port.save(pixling)
+    const egg = pixling ? rehatch(pixling, Math.random, now()) : hatchPixling(Math.random, now())
+    pixling = touchDay(bump(egg, 'sessions'), now()).pixling
+    await commit()
     const s = species()
     const tier = s.rarity === 'legendary' ? 3 : s.rarity === 'rare' || s.rarity === 'epic' ? 2 : 1
     play(`hatch-${tier}`, true)
@@ -628,7 +747,7 @@ export const register: Register = (on, options) => {
       void (async () => {
         await express({ mood: 'celebrate', priority: PRIORITY.hatch, holdMs: 3000, line: 'hatch' })
         const shiny = pixling?.isShiny ? ' ✦ SHINY!' : ''
-        port.toast(`${RARITY_STARS[s.rarity]} ${s.rarity.toUpperCase()}: a ${s.name} hatched!${shiny}  Try /pixling`, 8000)
+        toast(`${RARITY_STARS[s.rarity]} ${s.rarity.toUpperCase()}: a ${s.name} hatched!${shiny}  Try /pixling`, 8000)
       })()
     })
   }
@@ -642,6 +761,10 @@ export const register: Register = (on, options) => {
       void wake()
     })
   }
+
+  /** "14:00", or "Thu 14:00" for a reset more than 20 hours off (a weekly limit). */
+  const resetTime = (at: number): string =>
+    at - now() > FAR_RESET_MS ? `${WEEKDAYS[new Date(at).getDay()] ?? ''} ${clockTime(at)}` : clockTime(at)
 
   const fallAsleep = async (): Promise<void> => {
     const port = io
@@ -657,40 +780,85 @@ export const register: Register = (on, options) => {
     } catch {
       // Usage unreadable: nap on a retry timer instead.
     }
-    const wakeAt = resetsAt !== null ? resetsAt + NAP_GRACE_MS : at + NAP_RETRY_MS * Math.min(4, 1 + napRetries)
-    nap = { until: resetsAt, isAuto: wantsAutoContinue, kind }
-    await port.setNap(nap)
+    // A continue prompt that ran into the limit again: the same nap, gone on quietly.
+    const isRetry = napRetries > 0
     held = null
+    if (isRetry && resetsAt === null && napRetries >= NAP_MAX_RETRIES) {
+      napRetries = 0
+      await express({ mood: 'sleep', priority: PRIORITY.limit, holdMs: 4000, text: GIVE_UP_LINE })
+      return
+    }
+    const wakeAt = resetsAt !== null ? resetsAt + NAP_GRACE_MS : at + NAP_RETRY_MS * Math.min(4, 1 + napRetries)
+    // A reset days off (a weekly limit) is announced when it comes; the conversation is stale by then.
+    const isAuto = wantsAutoContinue && !isQuiet && (resetsAt === null || resetsAt - at <= NAP_MAX_AGE_MS)
+    nap = { until: resetsAt, isAuto, kind }
+    napSince = at
+    napSession = await port.sessionId()
+    await port.setNap(nap)
+    const time = resetsAt !== null ? resetTime(resetsAt) : null
     await express({
       priority: PRIORITY.limit,
-      line: resetsAt !== null ? 'limit' : 'limitUnknown',
-      slots: { time: resetsAt !== null ? clockTime(resetsAt) : null },
+      line: time !== null ? 'limit' : 'limitUnknown',
+      slots: { time },
       sound: 'sleep',
-      isImportant: true,
-      notify: resetsAt !== null ? `Usage limit hit. I'll wake Claude at ${clockTime(resetsAt)}.` : 'Usage limit hit.',
+      isImportant: !isRetry,
+      notify: isRetry
+        ? undefined
+        : time === null
+          ? 'Usage limit hit.'
+          : isAuto
+            ? `Usage limit hit. I'll wake Claude at ${time}.`
+            : `Usage limit hit. It resets: ${time}.`,
     })
-    count('naps')
-    await grant('nap')
+    if (!isRetry) {
+      count('naps')
+      await grant('nap')
+    }
     armWake(wakeAt)
   }
 
   const wake = async (): Promise<void> => {
     const port = io
     if (!port || !nap) return
-    const shouldContinue = nap.isAuto
+    const asleep = nap
+    // A timer's own moment: the next one is armed from it.
+    await syncClock(port)
+    if (nap !== asleep) return
+    const at = now()
+    // A reset is claimed only once the limits, read again, no longer block.
+    const windows = await port.usage().catch((): readonly LimitWindow[] => [])
+    // The person spoke (or the conversation ended) while the limits were read: nothing to wake.
+    if (nap !== asleep) return
+    const still = blockingWindow(windows, at)
+    if (still && still.resetsAt !== null) {
+      nap = { ...asleep, until: still.resetsAt, kind: still.kind, isAuto: asleep.isAuto && still.resetsAt - at <= NAP_MAX_AGE_MS }
+      await port.setNap(nap)
+      armWake(still.resetsAt + NAP_GRACE_MS)
+      return
+    }
+    const isSure = asleep.until !== null || (windows.length > 0 && !still)
     nap = null
     napTimer = null
-    napRetries += 1
     await port.setNap(null)
-    await express({
-      mood: 'attention',
-      priority: PRIORITY.wake,
-      holdMs: 4000,
-      line: 'wake',
-      sound: 'wake',
-      isImportant: true,
-      notify: shouldContinue ? 'Limit reset. Claude is back at work.' : 'Your usage limit has reset.',
-    })
+    // Only into the conversation that hit the limit, and only while it is fresh.
+    const isSameConversation = (await port.sessionId()) === napSession
+    const shouldContinue = asleep.isAuto && isSameConversation && at - napSince <= NAP_MAX_AGE_MS
+    if (isSure) {
+      napRetries = 0
+      await express({
+        mood: 'attention',
+        priority: PRIORITY.wake,
+        holdMs: 4000,
+        line: 'wake',
+        sound: 'wake',
+        isImportant: true,
+        notify: shouldContinue ? 'Limit reset. Claude is back at work.' : 'Your usage limit has reset.',
+      })
+    } else {
+      // No reset time was ever read (an API key's limits go unreported): a quiet try, not news.
+      napRetries += 1
+      await express({ mood: 'attention', priority: PRIORITY.wake, holdMs: 4000, text: shouldContinue ? RETRY_LINE : MAYBE_LINE, sound: 'wake' })
+    }
     if (shouldContinue) {
       // A session that cannot take a prompt now keeps the reminder in the bubble.
       await port.submit(CONTINUE_PROMPT).catch(() => undefined)
@@ -698,6 +866,7 @@ export const register: Register = (on, options) => {
   }
 
   const cancelNap = async (): Promise<void> => {
+    napRetries = 0
     if (!io || !nap) return
     napTimer?.cancel()
     napTimer = null
@@ -824,9 +993,14 @@ export const register: Register = (on, options) => {
       setMood: async value => {
         await update($, moodAtom, () => value)
       },
+      load: async () => $.store.get(STORE_KEY),
       save: async value => {
         await $.store.set(STORE_KEY, value)
       },
+      backup: async value => {
+        await $.store.set(BACKUP_KEY, value)
+      },
+      sessionId: async () => $.session.id().catch(() => null),
       run: async (argv, timeoutMs) => (await $.process.run(argv, { timeoutMs })).stdout,
       playAsset: async asset => {
         await $.audio.play({ asset })
@@ -856,16 +1030,19 @@ export const register: Register = (on, options) => {
       },
     }
     io = port
+    isQuiet = !e.isInteractive
     await syncClock(port)
     lastActivity = now()
     baseSince = now()
 
     const os = await $.env.get('OS')
-    try {
-      platform = os === 'Windows_NT' ? 'windows' : platformOfUname(await port.run(['uname', '-sr'], 5000))
-      await choosePlayer(port, $.plugin.root)
-    } catch {
-      player = { kind: 'none' }
+    if (!isQuiet) {
+      try {
+        platform = os === 'Windows_NT' ? 'windows' : platformOfUname(await port.run(['uname', '-sr'], 5000))
+        await choosePlayer(port, $.plugin.root)
+      } catch {
+        player = { kind: 'none' }
+      }
     }
 
     // The cache's lifetime: the person's setting, else what a past session learned, else 5m.
@@ -876,7 +1053,8 @@ export const register: Register = (on, options) => {
     const cacheNow = await read($, cacheAtom)
     cache = cacheNow ? { ...cacheNow, ttl, isTtlKnown: isKnown || cacheNow.isTtlKnown } : freshCache(ttl, isKnown)
 
-    const stored = revive(await $.store.get(STORE_KEY))
+    const raw = await $.store.get(STORE_KEY)
+    const stored = revive(raw)
     const lastSeen = Number((await $.store.get(SEEN_KEY)) ?? 0)
     await $.store.set(SEEN_KEY, now())
     await $.command.register({
@@ -884,36 +1062,41 @@ export const register: Register = (on, options) => {
       description: 'Your pixling: card, pet, name, wear, dex, hatch',
       argumentHint: '[pet | name <name> | wear <item> | dex | hatch | help]',
     })
-    $.clock.every(FRAME_MS, () => {
-      void tick()
-    })
+    if (!isQuiet) {
+      $.clock.every(FRAME_MS, () => {
+        void tick()
+      })
+    }
 
     // A hot reload finds a nap or a hatch in progress in $.state.
     const napNow = await read($, napAtom)
     if (napNow) {
       nap = napNow
+      napSince = now()
+      napSession = await port.sessionId()
       armWake(napNow.until !== null ? napNow.until + NAP_GRACE_MS : now() + NAP_RETRY_MS)
     }
     const hatchNow = await read($, hatchAtom)
     if (hatchNow !== null && now() - hatchNow < HATCH_MS + 2600) hatchAt = hatchNow
 
-    if (!stored) {
-      await hatch()
+    if (isUnreadable(raw)) {
+      // Never written over: the session runs on a stand-in it does not save.
+      pixling = touchDay(bump(hatchPixling(Math.random, now()), 'sessions'), now()).pixling
+      await readOnly(raw)
+      await publishView()
+    } else if (!stored) {
+      // A first egg hatches where someone sees it, not in a -p run.
+      if (!isQuiet) await hatch()
     } else {
+      savedAs = stored
       pixling = bump(stored, 'sessions')
       const recap = greetDay()
       await publishView()
       await grant('session')
       const away = lastSeen > 0 ? now() - lastSeen : 0
-      if (hatchAt === null) {
+      if (hatchAt === null && !isQuiet) {
         if (recap) {
-          await express({
-            mood: 'happy',
-            priority: PRIORITY.ambient,
-            holdMs: 7000,
-            line: 'recap',
-            slots: { label: recapLine(recap, localDate(now())) },
-          })
+          await showRecap(recap, PRIORITY.ambient)
         } else {
           await express({
             mood: 'happy',
@@ -923,22 +1106,22 @@ export const register: Register = (on, options) => {
             slots: { dur: formatDuration(away) },
           })
         }
-        const streak = pixling.streak.days
-        if (recap && streak >= 2) port.toast(`🔥 Day ${streak} in a row with ${pixling.name}. Keep it going!`, 7000)
       }
     }
     return next(e)
   })
 
   on('session.end', async ($, e, next) => {
-    if (pixling) await $.store.set(STORE_KEY, pixling).catch(() => undefined)
+    // The conversation is over (a /clear or a resume goes on under another id): so is its nap.
+    await cancelNap().catch(() => undefined)
+    await commit()
     return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind === 'composer' && pixling) {
+    if (!NOT_THE_PERSON.has(e.origin?.kind ?? 'unclassified') && pixling) {
       await touch()
-      if (nap) await cancelNap()
+      await cancelNap()
       const date = new Date(now())
       const night = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
       if (date.getHours() >= 1 && date.getHours() < 5 && saidLateNight !== night) {
@@ -950,6 +1133,8 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.start', async ($, e, next) => {
+    // Main-loop turns only: a subagent's run raises no turn.start.
+    isWorking = true
     const s = species()
     turnVerb = s.verbs[Math.floor(Math.random() * s.verbs.length)] ?? null
     turnPast = s.past[Math.floor(Math.random() * s.past.length)] ?? null
@@ -992,12 +1177,14 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId !== undefined || !pixling) return result
+    if (e.agentId !== undefined) return result
     isWorking = false
+    if (!pixling) return result
     icon = null
     switch (e.reason) {
       case 'answer': {
-        greetDay()
+        // A session that runs past midnight greets the new day on its first turn.
+        const recap = greetDay()
         tally('turns')
         if (new Date(now()).getHours() < 5) count('nights')
         if (e.durationMs > LONG_TURN_MS) {
@@ -1020,6 +1207,8 @@ export const register: Register = (on, options) => {
             sound: 'done',
           })
         }
+        // At the done reaction's priority, so the recap takes its bubble.
+        if (recap) await showRecap(recap, PRIORITY.done)
         await grant('turn', 'turns')
         break
       }
@@ -1103,7 +1292,7 @@ export const register: Register = (on, options) => {
     '/pixling name <name> — rename it',
     `/pixling wear <${WEARABLES}|none> — change its look`,
     '/pixling dex — the species you have hatched',
-    '/pixling hatch — release it and hatch a new egg (progress resets)',
+    '/pixling hatch — release it and hatch a new egg (level and stats reset; badges, streak and dex stay)',
     'Sound, voice, the band, vitals, the cache warning and auto-continue are in /config.',
   ].join('\n')
 
@@ -1210,15 +1399,16 @@ export const register: Register = (on, options) => {
         const keep = `Keep ${pixling.name}`
         let answer = keep
         try {
-          answer = await $.ui.ask(`Release ${pixling.name} and hatch a new egg? Level and stats start over; the dex is kept.`, [
-            keep,
-            'Hatch a new egg',
-          ])
+          answer = await $.ui.ask(
+            `Release ${pixling.name} and hatch a new egg? Level and stats start over; your badges, streak, tics and dex are kept.`,
+            [keep, HATCH_LABEL],
+          )
         } catch {
           return { text: 'Nothing changed.' }
         }
-        if (answer === keep) return { text: `${pixling.name} stays. ♥` }
-        await hatch(pixling.dex)
+        // Anything typed under "Other" is not a yes.
+        if (answer !== HATCH_LABEL) return { text: `${pixling.name} stays. ♥` }
+        await hatch()
         return { text: 'A new egg is hatching...' }
       }
       default:
@@ -1230,8 +1420,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const v = await read($, view)
-    if (e.props.hasSurvey || bandMode === 'off' || !v || !pixling) return next(e)
-    isWorking = e.props.isWorking
+    if (e.props.hasSurvey || bandMode === 'off' || !v || !pixling || e.props.maxRows < 1) return next(e)
     const said = await read($, bubbleAtom)
     const napping = await read($, napAtom)
     const pieces = wantsVitals ? await read($, vitalsAtom) : []
@@ -1243,11 +1432,19 @@ export const register: Register = (on, options) => {
     const text =
       napping !== null
         ? napping.until !== null
-          ? `Zzz... back at ${clockTime(napping.until)} (${formatDuration(napping.until - at)})${napping.isAuto ? ', then Claude carries on' : ''}`
+          ? `Zzz... back at ${resetTime(napping.until)} (${formatDuration(napping.until - at)})${napping.isAuto ? ', then Claude carries on' : ''}`
           : 'Zzz... napping through the limit.'
         : (said?.text ?? null)
 
-    if (bandMode === 'minimal') {
+    const frame = bandMode === 'full' ? frameAt(at) : null
+    const width = frame ? Math.max(16, Math.min(56, e.props.bodyColumns - frame.w - 4)) : 0
+    // The full band is as tall as the sprite or the column beside it; past the rows it may take,
+    // it folds into the one-line band.
+    const columnRows = 2 + (pieces.length > 0 ? 1 : 0) + (text ? 2 + Math.ceil(text.length / Math.max(1, width - 4)) : 0)
+    isCramped = frame !== null && Math.max(rowsFor(frame), columnRows) > e.props.maxRows
+
+    if (!frame || isCramped) {
+      bandId = null
       const mood = (await read($, moodAtom)) as Mood
       const { Box, Text } = $.ui.resolve(e)
       return (
@@ -1256,15 +1453,13 @@ export const register: Register = (on, options) => {
           <Text bold>{v.name}</Text>
           <Text dimColor>{` · Lv ${v.level}`}</Text>
           {pieces[0] ? <Text color={TONE_COLOR[pieces[0].tone]} dimColor={pieces[0].tone === 'dim'}>{`  ${pieces[0].text}`}</Text> : null}
-          {text ? <Text>{`  ${text}`}</Text> : null}
+          {text ? isCramped ? <Text wrap="truncate-end">{`  ${text}`}</Text> : <Text>{`  ${text}`}</Text> : null}
         </Box>
       )
     }
 
-    const frame = frameAt(at)
     lastFrame = frame
     const stars = `${RARITY_STARS[s.rarity]}${v.isShiny ? ' ✦' : ''}`
-    const width = Math.max(16, Math.min(56, e.props.bodyColumns - frame.w - 4))
 
     const info = (Box: Kit['Box'], Text: Kit['Text'], Button: Kit['Button']) => (
       <Box flexDirection="column" marginLeft={1} flexShrink={1} width={width}>

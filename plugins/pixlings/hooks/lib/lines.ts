@@ -116,15 +116,12 @@ const LINES: Record<LineKey, readonly string[]> = {
   refusal: ['Claude said no to that one.', 'That one is off-limits, apparently.'],
   limit: [
     'Out of juice. Napping till {time}.',
-    'Limit hit. Wake me at {time}... I will wake Claude.',
+    'Limit hit. Wake me at {time}.',
     'Rate limited! Back at {time}. Zzz.',
   ],
-  limitUnknown: ['Limit hit. Napping... I will check back.', 'Out of juice! Little nap first.'],
-  wake: [
-    "I'm up! Telling Claude to carry on...",
-    'Limit reset! Back to work, everyone!',
-    'Rise and shine! Continuing...',
-  ],
+  limitUnknown: ["Limit hit. Napping... I'll check back in a while.", 'Out of juice! Little nap, then I check again.'],
+  // Said only when the reset is certain; whether Claude carries on is the notification's to say.
+  wake: ["I'm up! The limit has reset.", 'Limit reset! Back to work, everyone!', 'Rise and shine! The limit reset.'],
   tired: ['{n}% of the {window} window used. Pace yourself.', 'We are at {n}%. Getting sleepy...'],
   lateNight: ["It's {time}. Even bugs sleep.", '{time}? Bold.', 'Night shift again, huh.'],
   levelUp: ['Level {level}! I feel... pixelier.', 'LEVEL {level}!', 'Ding! Level {level}.'],
