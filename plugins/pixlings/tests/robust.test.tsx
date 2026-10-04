@@ -34,6 +34,9 @@ const SLOW = {
   },
 }
 
+/** Tests that jump hours or days of clock: ~1 s alone, but slower when other suites share the CPU. */
+const LONG = 20_000
+
 type Ran = { argv: readonly string[]; init?: { stdin?: string; env?: Record<string, string> } }
 
 /** The engine beneath the pixling: a store the test can read, a session id it can change. */
@@ -193,7 +196,7 @@ describe('the nap', () => {
     expect(continues(submitted).length).toBe(1)
   })
 
-  test('a weekly limit days away names the day, and the reset is announced, not continued', { plugins: [SLOW] }, async ($, on) => {
+  test('a weekly limit days away names the day, and the reset is announced, not continued', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted, ran } = host(on, DUCK)
     const resetsAt = Date.parse('2026-10-06T14:00:00Z')
     usage(on, [{ kind: 'seven_day', percentUsed: 100, resetsAt: new Date(resetsAt).toISOString() }])
@@ -259,7 +262,7 @@ describe('the nap', () => {
     expect(sounds(ran)).toContain('wake')
   })
 
-  test('a nap a second limit stretched past six hours announces the reset instead of continuing', { plugins: [SLOW] }, async ($, on) => {
+  test('a nap a second limit stretched past six hours announces the reset instead of continuing', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted, ran } = host(on, DUCK)
     const first = NOON + 5 * 60 * MIN
     const second = first + 2 * 60 * MIN
@@ -277,7 +280,7 @@ describe('the nap', () => {
     expect(ran.some(r => r.argv.join(' ').includes('Your usage limit has reset'))).toBe(true)
   })
 
-  test('with no reset time to read, retries are quiet, worded as a retry, and stop after three', { options: { sound: 'important', band: 'minimal' }, plugins: [SLOW] }, async ($, on) => {
+  test('with no reset time to read, retries are quiet, worded as a retry, and stop after three', { options: { sound: 'important', band: 'minimal' }, plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted, ran } = host(on, DUCK)
     usage(on, [])
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
@@ -449,7 +452,7 @@ describe('a -p or SDK run', () => {
 })
 
 describe('the day', () => {
-  test('a session running past midnight shows yesterday’s recap on the first turn after it', { plugins: [SLOW] }, async ($, on) => {
+  test('a session running past midnight shows yesterday’s recap on the first turn after it', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
     const late = new Date(2026, 9, 3, 23, 50).getTime()
     const { clock } = host(on, DUCK, late)
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
