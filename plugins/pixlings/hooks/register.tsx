@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, PromptOrigin, Register, Timer } from 'claude-code'
 
-import type { PixlingsBubble, PixlingsCache, PixlingsNap, PixlingsVital, PixlingsView } from '../types'
+import type { PixlingsBubble, PixlingsCache, PixlingsEffect, PixlingsMini, PixlingsNap, PixlingsVital, PixlingsView } from '../types'
 import type { PixlingsPersona } from '../types'
 import { award, BADGES, countDay, earnedBadges, localDate, recapLine, touchDay } from './lib/badges.ts'
 import { baseMood, holdFor, moodNow, PRIORITY, react, speak } from './lib/brain.ts'
@@ -9,8 +9,8 @@ import type { Bubble, Held } from './lib/brain.ts'
 import { adopt, companionOf, configPath, readFileArgv, speciesNamed } from './lib/buddy.ts'
 import type { Companion } from './lib/buddy.ts'
 import { CARD_BG, CARD_SCALE, renderCard, shareText } from './lib/card.ts'
-import { CANVAS_W, HATCH_MS, renderFrame, renderHatch, renderSilhouette, samePixels, SPRITE_X } from './lib/canvas.ts'
-import type { Face, Hat, Icon, Mood, Pixels } from './lib/canvas.ts'
+import { CANVAS_W, HATCH_MS, MINI_LEAVE_MS, MINI_POOF_MS, miniTint, renderFrame, renderHatch, renderSilhouette, samePixels, SPRITE_X, SQUAD_CAP, squadWidth } from './lib/canvas.ts'
+import type { Face, Hat, Icon, MiniView, Mood, Pixels } from './lib/canvas.ts'
 import { blockingWindow, clockTime, formatDuration, iconFor, isTestCommand, riskOf, runsGitCommit, testOutcome } from './lib/detect.ts'
 import type { LimitWindow, Risk } from './lib/detect.ts'
 import { say } from './lib/lines.ts'
@@ -56,9 +56,22 @@ import { RARITY_COLOR, RARITY_STARS, SPECIES, speciesById } from './lib/sprites.
 import type { Species } from './lib/sprites.ts'
 import { addTics, isEyeRoll, ticsIn, topTics } from './lib/tics.ts'
 import type { Tic } from './lib/tics.ts'
-import { freshCache, hitPercent, observe, remainingMs, tokens, vitals } from './lib/vitals.ts'
+import {
+  applyKnownTtl,
+  decodeTtl,
+  encodeTtl,
+  freshCache,
+  guardDecision,
+  hitPercent,
+  modelLabel,
+  observe,
+  remainingMs,
+  tokens,
+  turnQuota,
+  vitals,
+} from './lib/vitals.ts'
 import { animalese, durationMs, wavOf } from './lib/voice.ts'
-import type { Cache, RequestUsage, Ttl } from './lib/vitals.ts'
+import type { Cache, QuotaDelta, RequestUsage, StoredTtl, Ttl } from './lib/vitals.ts'
 
 /** The elements the band and the card share across surfaces. */
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
@@ -193,7 +206,8 @@ type Io = {
   submit: (text: string) => Promise<void>
   setVitals: (value: PixlingsVital[]) => Promise<void>
   setCache: (value: Cache) => Promise<void>
-  saveTtl: (ttl: Ttl) => Promise<void>
+  /** The TTL with when it was learned and from where (encodeTtl), as the store keeps it. */
+  saveTtl: (stored: StoredTtl) => Promise<void>
   /** The prompt box's draft: a person typing is about to reply anyway. */
   draft: () => Promise<string>
   /** macOS's own voice, through the engine. */
@@ -597,6 +611,7 @@ export const register: Register = (on, options) => {
     const range = rangeNow()
     const w = walker
     const isStepping = w !== null && isWalking(w) && (mood === 'idle' || mood === 'working')
+    const { shown, hidden } = squadAt(at)
     return renderFrame({
       species: s,
       isShiny: p?.isShiny ?? false,
@@ -608,19 +623,28 @@ export const register: Register = (on, options) => {
       width: CANVAS_W + range,
       x: SPRITE_X + Math.min(w?.x ?? range, range),
       isFlipped: isStepping ? (w?.isFlipped ?? false) : false,
+      hasCap: isPlanning,
+      isSweating: contextPercent !== null && contextPercent >= SWEAT_AT,
+      squishT: compactingSince === null ? null : at - compactingSince,
+      reliefT: relievedAt === null ? null : at - relievedAt,
+      squad: shown,
+      hidden,
     })
   }
 
-  /** Columns the pixling may walk: the band's width past the canvas and the speech bubble. */
+  /**
+   * Columns the pixling may walk: the band's width past the canvas and the speech bubble. The
+   * squad's strip is taken out of it first, so minis widen the band only once that runs out.
+   */
   const rangeNow = (): number =>
-    wantsRoam && bandMode === 'full' && !isHatching(now()) ? roamRange(bandColumns) : 0
+    wantsRoam && bandMode === 'full' && !isHatching(now()) ? Math.max(0, roamRange(bandColumns) - squadColumns(now())) : 0
 
   const roam = (at: number): void => {
     const range = rangeNow()
     if (!walker) walker = newWalker(range, at)
     const { mood } = currentMood(at)
     const isHeld = held !== null && at < held.until
-    const mode: RoamMode = nap || mood === 'sleep' || isHeld ? 'stay' : isWorking ? 'home' : 'wander'
+    const mode: RoamMode = nap || mood === 'sleep' || isHeld || compactingSince !== null ? 'stay' : isWorking ? 'home' : 'wander'
     walker = walk(walker, range, mode, at, Math.random)
   }
 
@@ -629,7 +653,7 @@ export const register: Register = (on, options) => {
   const refreshVitals = async (at: number): Promise<void> => {
     const port = io
     if (!port || !wantsVitals) return
-    const pieces = vitals({ cache, now: at, isWorking, contextPercent, limits })
+    const pieces = vitals({ cache, now: at, isWorking, contextPercent, limits, model, effort, turnDelta })
     const key = pieces.map(v => `${v.text}:${v.tone}`).join('|')
     if (key !== lastVitals) {
       lastVitals = key
@@ -665,13 +689,15 @@ export const register: Register = (on, options) => {
       cache = seen
       await port.setCache(cache)
       if (news?.kind === 'learned') {
-        await port.saveTtl(news.ttl).catch(() => undefined)
+        await port.saveTtl(encodeTtl(news.ttl, sentAt, 'learned')).catch(() => undefined)
         await express({
           priority: PRIORITY.ambient,
           line: 'cacheLearned',
           slots: { item: news.ttl === '1h' ? 'an hour' : 'five minutes' },
         })
       } else if (news?.kind === 'cold') {
+        // A full miss overturned a stored hour: what the store says is wrong, and is replaced.
+        if (news.relearned) await port.saveTtl(encodeTtl(news.relearned, sentAt, 'learned')).catch(() => undefined)
         count('coldStarts')
         await express({
           mood: 'sad',
@@ -990,6 +1016,192 @@ export const register: Register = (on, options) => {
     }
   }
 
+  // Reactions: compaction, context sweat, plan mode, the squad, model switches ----------------
+
+  const squadAtom = atom({ plugin: 'pixlings', key: 'squad' } as const, [] as PixlingsMini[])
+  const planningAtom = atom({ plugin: 'pixlings', key: 'isPlanning' } as const, false)
+  const effectAtom = atom({ plugin: 'pixlings', key: 'effect' } as const, null as PixlingsEffect)
+
+  const wantsCacheGuard = options['cacheGuard'] !== false
+  /**
+   * Re-writing a warm cache dearer than this is put to the person before a model switch. At
+   * cache-write prices (1.25× input for 5m, 2× for 1h) a quarter is ~50k tokens of context
+   * moving to Opus 5.5, ~100k to Sonnet 5.5, and never a switch down to Haiku: a session well
+   * under way, where one keypress costs less than the money it saves. Below it, a dialog on
+   * every /model would nag more than it saves.
+   */
+  const GUARD_USD = 0.25
+  /** The context fill that makes it sweat, and the fill it must fall under to sweat again. */
+  const SWEAT_AT = 85
+  const SWEAT_AGAIN = 80
+  /** A compaction that never reports its end lets the press up after this. */
+  const COMPACT_MAX_MS = 10 * 60_000
+
+  type Mini = PixlingsMini & { icon: { icon: Icon; until: number } | null }
+
+  /** The $.state setters of this section, bound in session.start beside the Io port. */
+  let stage: {
+    squad: (value: PixlingsMini[]) => Promise<void>
+    isPlanning: (value: boolean) => Promise<void>
+    effect: (value: PixlingsEffect) => Promise<void>
+  } | null = null
+  /** Subagents' minis, oldest first; a finished one stays MINI_LEAVE_MS to celebrate and go. */
+  let squad: Mini[] = []
+  /** Minis that joined since the squad last stood empty: the high fives the last one counts. */
+  let squadRun = 0
+  let isPlanning = false
+  let compactingSince: number | null = null
+  let relievedAt: number | null = null
+  let hasSweated = false
+  let contextWindow: number | null = null
+  /** turn.step's `model` and `effort` on the main loop (index.d.ts TurnStepInput). */
+  let model: string | undefined
+  let effort: string | number | undefined
+  /** The rate-limit windows as a main turn began, and what the last one took from them. */
+  let quotaBefore: readonly LimitWindow[] | null = null
+  let turnDelta: readonly QuotaDelta[] = []
+
+  /** The last short effect, for a surface that mirrors the band (the room). */
+  const flash = async (kind: string): Promise<void> => {
+    await stage?.effect({ kind, at: now() }).catch(() => undefined)
+  }
+
+  const publishSquad = async (): Promise<void> => {
+    await stage?.squad(squad.map(({ icon: _icon, ...mini }) => mini)).catch(() => undefined)
+  }
+
+  const seedOf = (id: string): number => {
+    let h = 0
+    for (const ch of id) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0
+    return Math.abs(h) % 97
+  }
+
+  /** The minis on the strip at `at`, oldest first, the rest counted; gone once they poofed. */
+  const squadAt = (at: number): { shown: MiniView[]; hidden: number } => {
+    const here = squad.filter(m => m.doneAt === null || at - m.doneAt < MINI_LEAVE_MS)
+    const shown = here.slice(0, SQUAD_CAP).map(m => ({
+      tint: miniTint(m.label),
+      // A frame timed a moment before the event it follows draws the event's first frame.
+      t: Math.max(0, at - m.startedAt),
+      doneT: m.doneAt === null ? null : Math.max(0, at - m.doneAt),
+      icon: m.icon && at < m.icon.until ? m.icon.icon : null,
+      seed: seedOf(m.agentId),
+    }))
+    return { shown, hidden: here.length - shown.length }
+  }
+
+  const squadColumns = (at: number): number => {
+    const { shown, hidden } = squadAt(at)
+    return squadWidth(shown.length, hidden)
+  }
+
+  /** A subagent started: a mini tinted for its type hops onto the strip. */
+  const joinSquad = async (agentId: string, agentType: string): Promise<void> => {
+    if (!pixling || squad.some(m => m.agentId === agentId)) return
+    const isFirst = squad.every(m => m.doneAt !== null)
+    squadRun = isFirst ? 1 : squadRun + 1
+    squad = [...squad, { agentId, label: agentType, speciesId: pixling.species, startedAt: now(), doneAt: null, icon: null }]
+    await publishSquad()
+    if (isFirst) await express({ priority: PRIORITY.ambient, line: 'squadUp', slots: { label: agentType } })
+  }
+
+  /**
+   * A mini's agent finished: it jumps for joy, the pixling high-fives it, and it poofs away.
+   * Stopped by an interrupt instead, it goes straight to the poof, with nothing to celebrate.
+   */
+  const leaveSquad = async (agentId: string, isAborted = false): Promise<void> => {
+    const port = io
+    const mini = squad.find(m => m.agentId === agentId)
+    if (!port || !mini || mini.doneAt !== null) return
+    const doneAt = isAborted ? now() - MINI_POOF_MS : now()
+    squad = squad.map(m => (m.agentId === agentId ? { ...m, doneAt, icon: null } : m))
+    await publishSquad()
+    port.after(Math.max(0, MINI_LEAVE_MS - (now() - doneAt)), () => {
+      squad = squad.filter(m => m.agentId !== agentId)
+      void publishSquad()
+    })
+    if (isAborted) return
+    await flash('highFive')
+    if (squad.some(m => m.doneAt === null)) {
+      await express({ mood: 'happy', priority: PRIORITY.ambient, holdMs: 900 })
+    } else {
+      const isOne = squadRun <= 1
+      await express({
+        mood: 'happy',
+        priority: PRIORITY.ambient,
+        holdMs: 1800,
+        line: isOne ? 'squadDoneOne' : 'squadDone',
+        slots: { n: squadRun, label: mini.label },
+      })
+    }
+  }
+
+  /** A subagent's tool: its icon over that agent's mini. */
+  const showMiniIcon = (agentId: string, tool: Icon): void => {
+    squad = squad.map(m => (m.agentId === agentId && m.doneAt === null ? { ...m, icon: { icon: tool, until: now() + 2500 } } : m))
+  }
+
+  /** A main-conversation compaction began: the press comes down on the pixling. */
+  const squish = async (): Promise<void> => {
+    const since = now()
+    compactingSince = since
+    relievedAt = null
+    io?.after(COMPACT_MAX_MS, () => {
+      if (compactingSince === since) compactingSince = null
+    })
+    await flash('squish')
+  }
+
+  /**
+   * The compaction ended: the press lifts and the pixling springs back, saying what was freed.
+   * `session.compact`'s result carries the conversation's size before and after, when core
+   * recorded them; the context fill is the new size over the window the last measure reported,
+   * or unknown until the next measure, never the stale fill from before.
+   */
+  const relieve = async (counts: { before?: number; after?: number } | null): Promise<void> => {
+    compactingSince = null
+    if (!counts) return
+    relievedAt = now()
+    const { before, after } = counts
+    contextPercent = after !== undefined && contextWindow ? Math.min(100, (after / contextWindow) * 100) : null
+    if (contextPercent === null || contextPercent < SWEAT_AGAIN) hasSweated = false
+    await flash('relief')
+    const freed = before !== undefined && after !== undefined && before > after ? before - after : null
+    await express({
+      mood: 'happy',
+      priority: PRIORITY.commit,
+      holdMs: 2600,
+      line: freed !== null ? 'compacted' : 'compactedPlain',
+      slots: freed !== null ? { n: tokens(freed), label: `${tokens(before!)} → ${tokens(after!)}` } : undefined,
+      sound: 'push',
+    })
+  }
+
+  /** The context crossed 85%: a bead of sweat while it stays there, and one line per crossing. */
+  const noteContext = async (): Promise<void> => {
+    const pct = contextPercent
+    if (pct === null) return
+    if (pct < SWEAT_AGAIN) hasSweated = false
+    if (pct < SWEAT_AT || hasSweated) return
+    hasSweated = true
+    await flash('sweat')
+    await express({ priority: PRIORITY.commit, line: 'contextSweat', slots: { n: Math.round(pct) } })
+  }
+
+  /** The main loop's plan-mode reminder puts the thinking cap on; the exit note takes it off. */
+  const notePlan = async (type: string): Promise<void> => {
+    const isOn = type === 'plan_mode' || type === 'plan_mode_reentry'
+    if ((!isOn && type !== 'plan_mode_exit') || isOn === isPlanning) return
+    isPlanning = isOn
+    await stage?.isPlanning(isOn).catch(() => undefined)
+    await flash(isOn ? 'thinkingCap' : 'capOff')
+    await express({ priority: PRIORITY.ambient, line: isOn ? 'planOn' : 'planOff' })
+  }
+
+  /** The rate-limit windows now; the last measured ones when they cannot be read. */
+  const readLimits = async (): Promise<readonly LimitWindow[]> =>
+    io ? io.usage().catch(() => limits) : limits
+
   on('session.start', async ($, e, next) => {
     const port: Io = {
       now: () => $.clock.now(),
@@ -1034,8 +1246,8 @@ export const register: Register = (on, options) => {
       setCache: async value => {
         await update($, cacheAtom, () => value)
       },
-      saveTtl: async ttl => {
-        await $.store.set(TTL_KEY, ttl)
+      saveTtl: async stored => {
+        await $.store.set(TTL_KEY, stored)
       },
       draft: async () => (await $.prompt.read()).text,
       speak: async text => {
@@ -1046,6 +1258,17 @@ export const register: Register = (on, options) => {
       },
     }
     io = port
+    stage = {
+      squad: async value => {
+        await update($, squadAtom, () => value)
+      },
+      isPlanning: async value => {
+        await update($, planningAtom, () => value)
+      },
+      effect: async value => {
+        await update($, effectAtom, () => value)
+      },
+    }
     isQuiet = !e.isInteractive
     await syncClock(port)
     lastActivity = now()
@@ -1061,11 +1284,13 @@ export const register: Register = (on, options) => {
       }
     }
 
-    // The cache's lifetime: the person's setting, else what a past session learned, else 5m.
-    const learned = await $.store.get(TTL_KEY)
+    // The cache's lifetime: the person's setting, else what a past session learned or a model
+    // switch named while it is still trusted, else 5m. 0.2's bare '5m' or '1h' carries no date,
+    // so it is not trusted: the lifetime is assumed and learned again.
     isTtlPinned = isTtl(ttlSetting)
-    const ttl: Ttl = isTtl(ttlSetting) ? ttlSetting : isTtl(learned) ? learned : '5m'
-    const isKnown = isTtlPinned || isTtl(learned)
+    const known = isTtlPinned ? null : decodeTtl(await $.store.get(TTL_KEY), now())
+    const ttl: Ttl = isTtl(ttlSetting) ? ttlSetting : (known?.ttl ?? '5m')
+    const isKnown = isTtlPinned || known !== null
     const cacheNow = await read($, cacheAtom)
     cache = cacheNow ? { ...cacheNow, ttl, isTtlKnown: isKnown || cacheNow.isTtlKnown } : freshCache(ttl, isKnown)
 
@@ -1144,8 +1369,14 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    // The conversation is over (a /clear or a resume goes on under another id): so is its nap.
+    // The conversation is over (a /clear or a resume goes on under another id): so is its nap,
+    // its plan mode, its compaction and its squad.
     await cancelNap().catch(() => undefined)
+    squad = []
+    isPlanning = false
+    compactingSince = null
+    await publishSquad()
+    await stage?.isPlanning(false).catch(() => undefined)
     await commit()
     return next(e)
   })
@@ -1171,11 +1402,18 @@ export const register: Register = (on, options) => {
     const s = species()
     turnVerb = s.verbs[Math.floor(Math.random() * s.verbs.length)] ?? null
     turnPast = s.past[Math.floor(Math.random() * s.past.length)] ?? null
+    // The limits as the turn begins: what it took from them is told when it completes.
+    quotaBefore = await readLimits()
     return next(e)
   })
 
   on('turn.step', async function* ($, e, next) {
     const sentAt = now()
+    if (e.agentId === undefined) {
+      // The model and effort the main loop's request names: the vitals row's last piece.
+      model = e.model
+      effort = e.effort
+    }
     const result = yield* next(e)
     if (e.agentId === undefined && pixling) {
       // The pixling watches; it never breaks a turn.
@@ -1189,8 +1427,13 @@ export const register: Register = (on, options) => {
     lastActivity = now()
     const input = e as unknown as Record<string, unknown>
     const command = typeof input['command'] === 'string' ? input['command'] : ''
+    // Whose tool it is: the main loop's icon goes over the pixling; a subagent's (agentId) over
+    // that agent's mini, never the pixling; a loop with no mini (a fork, a workflow's agent)
+    // shows none. Everything below is anyone's: danger is danger whoever runs it, and every
+    // test run and git operation counts toward the stats.
     const nextIcon = iconFor(String(e.tool), command)
-    if (nextIcon) icon = { icon: nextIcon, until: now() + 2500 }
+    if (nextIcon && e.agentId === undefined) icon = { icon: nextIcon, until: now() + 2500 }
+    else if (nextIcon && e.agentId !== undefined) showMiniIcon(e.agentId, nextIcon)
     const risk = command ? riskOf(command) : null
     if (risk) await reactRisk(risk)
 
@@ -1212,8 +1455,18 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if (e.agentId !== undefined) return result
     isWorking = false
+    if (quotaBefore !== null) {
+      const before = quotaBefore
+      quotaBefore = null
+      turnDelta = turnQuota(before, await readLimits())
+    }
     if (!pixling) return result
     icon = null
+    if (e.reason === 'aborted') {
+      // An interrupt stops the subagents it was waiting on, which report no stop: their minis
+      // go without a celebration.
+      for (const m of squad) if (m.doneAt === null) await leaveSquad(m.agentId, true)
+    }
     switch (e.reason) {
       case 'answer': {
         // A session that runs past midnight greets the new day on its first turn.
@@ -1297,7 +1550,9 @@ export const register: Register = (on, options) => {
 
   on('session.measure', async ($, e, next) => {
     contextPercent = e.context.percent ?? contextPercent
+    contextWindow = e.context.window
     limits = e.rateLimits
+    await noteContext().catch(() => undefined)
     for (const w of e.rateLimits) {
       const key = `${w.kind}:${w.resetsAt ?? ''}`
       if (w.percentUsed >= 90 && w.percentUsed < 100 && !warnedWindows.has(key)) {
@@ -1309,6 +1564,83 @@ export const register: Register = (on, options) => {
           line: 'tired',
           slots: { n: Math.round(w.percentUsed), window: w.kind.replace('_', '-') },
         })
+      }
+    }
+    return next(e)
+  })
+
+  on('session.compact', async ($, e, next) => {
+    // The main conversation only: a subagent's or a fork's own transcript (agentId) is not the
+    // pixling's to feel, and a precompute installs nothing.
+    if (e.agentId !== undefined || e.trigger === 'precompute' || !pixling) return next(e)
+    await squish().catch(() => undefined)
+    let result: Awaited<ReturnType<typeof next>>
+    try {
+      result = await next(e)
+    } catch (error) {
+      compactingSince = null
+      throw error
+    }
+    // A vetoed compaction (`skip`) squeezed nothing: the press just lifts.
+    const counts = result.skip === undefined ? { before: result.tokensBefore, after: result.tokensAfter } : null
+    await relieve(counts).catch(() => undefined)
+    return result
+  })
+
+  on('prompt.attachment', async ($, e, next) => {
+    // Observe only: the attachment the model reads is the chain's answer beneath, untouched.
+    const result = await next(e)
+    if (e.agentId === undefined && pixling) await notePlan(e.type).catch(() => undefined)
+    return result
+  })
+
+  on('classic.SubagentStart', async ($, e, next) => {
+    if (pixling) await joinSquad(e.agent_id, e.agent_type).catch(() => undefined)
+    return next(e)
+  })
+
+  on('classic.SubagentStop', async ($, e, next) => {
+    if (pixling) await leaveSquad(e.agent_id).catch(() => undefined)
+    return next(e)
+  })
+
+  on('classic.PreModelSwitch', async ($, e, next) => {
+    const result = await next(e)
+    // The person's own settings hooks beneath decide first. A -p or SDK switch has nobody to
+    // ask, and a cold cache costs nothing to leave (guardDecision reads the engine's word).
+    if (!wantsCacheGuard || isQuiet || e.source === 'sdk') return result
+    if (result.permissionDecision !== undefined || result.block !== undefined) return result
+    const { shouldAsk, reason } = guardDecision({
+      isWarm: e.prompt_cache_warm,
+      estimatedUsd: e.estimated_cache_write_usd,
+      remainingMs: remainingMs(cache, now()),
+      thresholdUsd: GUARD_USD,
+    })
+    if (!shouldAsk) return result
+    await express({ mood: 'attention', priority: PRIORITY.commit, holdMs: 4000 }).catch(() => undefined)
+    return { ...result, permissionDecision: 'ask', permissionDecisionReason: reason }
+  })
+
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    const port = io
+    if (port && pixling) {
+      const at = now()
+      model = e.to_model
+      // The engine names the cache's lifetime here: known, and kept 30 days with its source.
+      // A lifetime the person pinned in /config still wins over it.
+      if (!isTtlPinned) {
+        cache = applyKnownTtl(cache, e.cache_ttl)
+        await port.setCache(cache).catch(() => undefined)
+      }
+      await port.saveTtl(encodeTtl(e.cache_ttl, at, 'switch')).catch(() => undefined)
+      await refreshVitals(at).catch(() => undefined)
+      if (e.source !== 'resume' && e.source !== 'sdk') {
+        const isDear = e.prompt_cache_warm && e.estimated_cache_write_usd >= 0.01
+        await express({
+          priority: PRIORITY.ambient,
+          line: isDear ? 'modelSwitchWarm' : 'modelSwitch',
+          slots: { label: modelLabel(e.to_model), item: `$${e.estimated_cache_write_usd.toFixed(2)}` },
+        }).catch(() => undefined)
       }
     }
     return next(e)

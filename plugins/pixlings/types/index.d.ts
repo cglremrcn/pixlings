@@ -46,16 +46,25 @@ export type PixlingsPersona = string | null
 
 // --- reactions and the squad (W6) ---
 
-/** One subagent's mini pixling while it works, and briefly after it finishes. */
+/**
+ * One subagent's mini while it works, and for MINI_LEAVE_MS (lib/canvas.ts) after it finishes,
+ * oldest first. lib/canvas.ts `renderMini` draws one; `miniTint(label)` is its color.
+ */
 export type PixlingsMini = {
   agentId: string
+  /** The subagent's type as the engine names it ("Explore", "general-purpose", a plugin's). */
   label: string
+  /** The species of the pixling the helper works for. */
   speciesId: string
   startedAt: number
   doneAt: number | null
 }
 
-/** A short effect played over the pixling: compaction squish, context sweat, the thinking cap. */
+/**
+ * The last short effect played over the pixling, `at` when it began: `squish` (a compaction
+ * started), `relief` (it ended), `sweat` (the context crossed 85%), `thinkingCap` (plan mode
+ * began), `capOff` (it ended), `highFive` (a subagent finished).
+ */
 export type PixlingsEffect = { kind: string; at: number } | null
 
 // --- every surface (W7) ---

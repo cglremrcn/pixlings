@@ -48,6 +48,16 @@ export type LineKey =
   | 'backFromAway'
 
   // Reactions: compaction, plan mode, the squad, model switches
+  | 'compacted'
+  | 'compactedPlain'
+  | 'contextSweat'
+  | 'planOn'
+  | 'planOff'
+  | 'squadUp'
+  | 'squadDone'
+  | 'squadDoneOne'
+  | 'modelSwitch'
+  | 'modelSwitchWarm'
 
   // The room and the transcript
 
@@ -166,6 +176,17 @@ const LINES: Record<LineKey, readonly string[]> = {
   backFromAway: ["I'm back! What did I miss?", 'Back on duty!', 'Missed me? I counted your commits.'],
 
   // Reactions: compaction, plan mode, the squad, model switches
+  // {label} is the context before and after ("150k → 31k"), {n} what was freed ("119k").
+  compacted: ['Phew! {label} tokens. I can breathe again.', 'Squeezed out {n} tokens. So roomy!', '*pop* {label}. Much better.'],
+  compactedPlain: ['Phew. Squished, but lighter.', '*pop* All compacted. Roomy in here.'],
+  contextSweat: ['Context at {n}%. Getting snug in here.', '{n}% full. *sweats*', 'We are at {n}% context. A compaction is coming.'],
+  planOn: ["Thinking cap on. Let's plan first.", 'Plan mode! Look, think, no touching.', '*propeller whirs* Planning...'],
+  planOff: ['Cap off, sleeves up!', 'Thinking cap off. Time to build.', 'Out of plan mode. Go go go!'],
+  squadUp: ['Calling in a helper!', 'Go, little {label}!', 'Backup has arrived!'],
+  squadDone: ['The squad is back! {n} high fives.', 'All {n} helpers done. Teamwork!', '{n} helpers, {n} high fives.'],
+  squadDoneOne: ['High five, little helper!', 'Nice work, {label}!', 'Helper is back. Good job!'],
+  modelSwitch: ['New brain: {label}.', 'Switched to {label}. Hi there!', 'Now running on {label}.'],
+  modelSwitchWarm: ['Switched to {label}. Re-caching ~{item}.', '{label} now. That cache costs ~{item} to write again.'],
 
   // The room and the transcript
 }

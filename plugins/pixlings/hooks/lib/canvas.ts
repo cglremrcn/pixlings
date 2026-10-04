@@ -51,6 +51,32 @@ export type FrameInput = {
   readonly x?: number
   /** Faces left (the art faces right or front). */
   readonly isFlipped?: boolean
+  /** Plan mode: the propeller thinking cap, in place of the worn hat. */
+  readonly hasCap?: boolean
+  /** The context window is nearly full: a bead of sweat runs down the brow. */
+  readonly isSweating?: boolean
+  /** Milliseconds into a compaction, squished under the press; null or absent when none runs. */
+  readonly squishT?: number | null
+  /** Milliseconds since a compaction ended, springing back up; null or absent when none did. */
+  readonly reliefT?: number | null
+  /** Subagents' minis, on a strip of their own right of the canvas `width`. */
+  readonly squad?: readonly MiniView[]
+  /** Minis past the strip's cap, counted as "+N" at its end. */
+  readonly hidden?: number
+}
+
+/** One subagent's mini as the strip draws it. */
+export type MiniView = {
+  /** Its body color (miniTint of its agent type). */
+  readonly tint: number
+  /** Milliseconds since it joined. */
+  readonly t: number
+  /** Milliseconds since its agent finished; null while it works. */
+  readonly doneT: number | null
+  /** The tool its agent is running, held over its head. */
+  readonly icon?: Icon | null
+  /** Offsets its bob and glances, so a squad does not move in lockstep. */
+  readonly seed?: number
 }
 
 export const blank = (w = CANVAS_W, h = CANVAS_H): Pixels => ({
@@ -287,9 +313,13 @@ export const layoutFor = (s: Species, hat?: Hat | null): { y: number; h: number 
   return { y, h: y + 16 }
 }
 
-/** How far up the sprite may jump without leaving the canvas (hat included). */
-const headroom = (s: Species, y: number, hat?: Hat | null): number => {
-  const hatTop = hat ? s.head[1] - HATS[hat].lift - (hat === 'halo' ? 1 : 0) : topRow(s)
+/** How far up the sprite may jump without leaving the canvas (hat, or thinking cap, included). */
+const headroom = (s: Species, y: number, hat?: Hat | null, hasCap = false): number => {
+  const hatTop = hasCap
+    ? s.head[1] - CAP_LIFT
+    : hat
+      ? s.head[1] - HATS[hat].lift - (hat === 'halo' ? 1 : 0)
+      : topRow(s)
   return Math.max(0, y + Math.min(topRow(s), hatTop))
 }
 
@@ -452,6 +482,277 @@ const drawBloom = (p: Pixels, ox: number, oy: number, s: Species): void => {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Reactions: the thinking cap, context sweat, the compaction press, the subagent squad
+
+/**
+ * Plan mode's propeller beanie. Three rows above the head at most, so it fits the headroom every
+ * species already has: putting it on never makes the band taller.
+ */
+const CAP_LIFT = 3
+const CAP_DOME = ['..RYB..', '.RRYBB.', 'RRRYBBB']
+/** The propeller seen from the side as it turns: one blade light, one dark, swapping. */
+const CAP_SPIN = ['LLLYDDD', '.LLYDD.', '...Y...', '.DDYLL.', 'DDDYLLL', '.DDYLL.', '...Y...', '.LLYDD.']
+const CAP_COLORS: Readonly<Record<string, number>> = { R: 0xff5a6e, Y: 0xffd23f, B: 0x4dc3ff, L: 0xe9f7ff, D: 0x7d8aa3 }
+
+const drawCap = (p: Pixels, s: Species, ox: number, oy: number, t: number): void => {
+  const [hx, hy] = s.head
+  stamp(p, ox + hx - 3, oy + hy - CAP_LIFT, [pick(CAP_SPIN, step(t, 90)), ...CAP_DOME], CAP_COLORS)
+}
+
+const BEAD = ['.D', 'DW', 'DD']
+
+/** A bead of sweat forms at the brow beside the far eye, runs down, and comes again. */
+const drawBead = (p: Pixels, s: Species, ox: number, oy: number, t: number): void => {
+  const eye = s.eyes[s.eyes.length - 1]
+  if (!eye) return
+  const local = t % 2400
+  if (local >= 2000) return
+  const x = eye[0] + s.eyeSize[0]
+  // It forms on the brow, never in the air above a head that slopes away (the turtle's).
+  const brow = s.art.findIndex(row => [x, x + 1, x + 2].some(c => (row[c] ?? '.') !== '.'))
+  const y = Math.max(eye[1] - 2, brow - 1)
+  const slide = Math.min(3, Math.floor(local / 500))
+  stamp(p, ox + x, oy + y + slide, BEAD, { D: 0x4aa8ff, W: 0xe6f6ff })
+}
+
+/** How long a compaction's end springs the pixling back up. */
+export const SPRING_MS = 480
+
+/** The squish and the spring as scale factors about the feet: [across, up]. */
+const squashOf = (squishT: number | null, springT: number | null): readonly [number, number] => {
+  if (squishT !== null) return step(squishT, 380) % 2 === 0 ? [1.22, 0.6] : [1.18, 0.66]
+  if (springT !== null && springT < 160) return [0.88, 1.12]
+  return [1, 1]
+}
+
+/** Copies the sprite layer onto the canvas scaled about its feet (`cx`, `floor`). */
+const scaleInto = (p: Pixels, layer: Pixels, cx: number, floor: number, sx: number, sy: number): void => {
+  for (let y = 0; y < p.h; y++) {
+    const from = Math.round(floor - (floor - y) / sy)
+    if (from < 0 || from >= layer.h) continue
+    for (let x = 0; x < p.w; x++) {
+      const color = get(layer, Math.floor(cx + (x + 0.5 - cx) / sx), from)
+      if (color !== TRANSPARENT) put(p, x, y, color)
+    }
+  }
+}
+
+const topOf = (p: Pixels): number => {
+  for (let i = 0; i < p.px.length; i++) if (p.px[i] !== TRANSPARENT) return Math.floor(i / p.w)
+  return p.h
+}
+
+const PRESS_HI = 0xdfe6f2
+const PRESS = 0x9aa5bd
+const PRESS_LO = 0x5d6a80
+
+/** The compactor: a plate resting on the squished head, on a rod from the top of the band. */
+const drawPress = (p: Pixels, cx: number, top: number): void => {
+  const plate = top - 2
+  for (let x = cx - 9; x < cx + 9; x++) {
+    put(p, x, plate, PRESS_HI)
+    put(p, x, plate + 1, x === cx - 9 || x === cx + 8 ? PRESS_LO : PRESS)
+  }
+  for (let y = 0; y < plate; y++) {
+    put(p, cx - 1, y, PRESS_LO)
+    put(p, cx, y, PRESS)
+  }
+}
+
+/** Squeezed tight: >_< at where the eyes and mouth land on the squished body. */
+const drawStrain = (p: Pixels, s: Species, ox: number, oy: number, map: (x: number, y: number) => Point): void => {
+  const [w, h] = s.eyeSize
+  s.eyes.forEach(([ex, ey], i) => {
+    const [x, y] = map(ox + ex + (w - 1) / 2, oy + ey + (h - 1) / 2)
+    // The left eye points right (>), the right eye left (<).
+    const back = i === 0 ? -1 : 1
+    put(p, x + back, y - 1, s.eyeColor)
+    put(p, x, y, s.eyeColor)
+    put(p, x + back, y + 1, s.eyeColor)
+  })
+  if (s.mouth) {
+    const [mx, my] = map(ox + s.mouth[0] + 1.5, oy + s.mouth[1])
+    put(p, mx - 1, my, s.eyeColor)
+    put(p, mx, my, s.eyeColor)
+  }
+}
+
+/** Mid-tones that hold on a dark terminal and a light one alike. */
+const PUFF = 0xb4bfd0
+
+// The squad: one mini per running subagent, on a strip right of the pixling's own canvas.
+
+/**
+ * A mini's art: a little critter on two feet with two feelers, `a` and `b` their tips (which
+ * blink in turn while it works). The face is drawn on top. Two feelers, not one: a single stalk
+ * with a lit tip reads as a bomb's fuse at this size.
+ */
+const MINI_ART = [
+  '.a....b.',
+  '..k..k..',
+  '..KKKK..',
+  '.KLLBBK.',
+  'KLBBBBBK',
+  'KBBBBBBK',
+  'KSBBBBSK',
+  '.KSSSSK.',
+  '.KK..KK.',
+]
+export const MINI_W = 8
+export const MINI_H = MINI_ART.length
+/** A mini and the gap after it. */
+export const MINI_SLOT = MINI_W + 1
+/** How many minis stand on the strip; the rest are counted. */
+export const SQUAD_CAP = 4
+/** A finished mini celebrates, then poofs away this long after its agent stopped. */
+export const MINI_LEAVE_MS = 3000
+/** When the celebration gives way to the poof. */
+export const MINI_POOF_MS = 2400
+/** Working: tall eyes and a small smile, the whole face glancing left or right now and then. */
+const MINI_FACE: readonly Point[] = [
+  [2, 4],
+  [2, 5],
+  [5, 4],
+  [5, 5],
+  [3, 6],
+  [4, 6],
+]
+/** Done: eyes shut with joy and a wide-open mouth. */
+const MINI_JOY: readonly Point[] = [
+  [1, 4],
+  [2, 4],
+  [5, 4],
+  [6, 4],
+  [3, 5],
+  [4, 5],
+]
+const MINI_GLANCE = [0, -1, 0, 1]
+const MINI_INK = 0x1b1424
+const MINI_LIT = 0xffe14d
+
+/** Agent types the engine ships, each in its own color; any other type hashes into the set. */
+const MINI_TINTS = [0xffa64d, 0x4fd1c5, 0xb18cff, 0x6fdc8c, 0xff7eb6, 0x5aa9ff, 0xffd23f, 0xff6b6b]
+const KNOWN_TINT: Readonly<Record<string, number>> = {
+  'general-purpose': 0,
+  Explore: 1,
+  Plan: 2,
+  'statusline-setup': 3,
+  'claude-code-guide': 5,
+}
+
+/** The body color a subagent of this type wears. */
+export const miniTint = (agentType: string): number => {
+  const known = KNOWN_TINT[agentType]
+  if (known !== undefined) return MINI_TINTS[known] ?? MINI_TINTS[0]!
+  let h = 0
+  for (const ch of agentType) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0
+  return pick(MINI_TINTS, h)
+}
+
+const mix = (a: number, b: number, k: number): number => {
+  const ch = (shift: number): number => {
+    const x = (a >> shift) & 255
+    const y = (b >> shift) & 255
+    return Math.round(x + (y - x) * k) << shift
+  }
+  return ch(16) | ch(8) | ch(0)
+}
+
+/** The tips stay the body color unless lit: pale tips vanish on a light terminal. */
+const miniPalette = (tint: number, lit: 'a' | 'b' | 'both'): Readonly<Record<string, number>> => ({
+  K: mix(tint, 0x000000, 0.6),
+  B: tint,
+  L: mix(tint, 0xffffff, 0.5),
+  S: mix(tint, 0x000000, 0.25),
+  k: mix(tint, 0x000000, 0.6),
+  a: lit === 'b' ? tint : MINI_LIT,
+  b: lit === 'a' ? tint : MINI_LIT,
+})
+
+const MINI_HOP = [-3, -2, -1, 0]
+const MINI_JUMP = [0, -1, -2, -3, -3, -2, -1, 0, 0, 0]
+const POOF: readonly (readonly string[])[] = [
+  ['.##.', '####', '####', '.##.'],
+  ['#..#', '.##.', '.##.', '#..#'],
+  ['#..#', '....', '....', '#..#'],
+]
+
+/** One mini with its feet on row `floor`, its left edge at `x`. */
+const drawMini = (p: Pixels, x: number, floor: number, m: MiniView): void => {
+  const seed = m.seed ?? 0
+  const top = floor - MINI_H + 1
+  if (m.doneT !== null && m.doneT >= MINI_POOF_MS) {
+    const frame = POOF[Math.min(POOF.length - 1, step(m.doneT - MINI_POOF_MS, 150))] ?? []
+    stamp(p, x + 2, floor - 4, frame, { '#': PUFF })
+    return
+  }
+  if (m.doneT !== null) {
+    // Its agent is done: a jump with both arms up, eyes shut with joy, a sparkle overhead.
+    const t = m.doneT
+    const y = top + pick(MINI_JUMP, step(t, 70))
+    stamp(p, x, y, MINI_ART, miniPalette(m.tint, 'both'))
+    for (const [ax, ay] of [[-1, 4], [-1, 3], [MINI_W, 4], [MINI_W, 3]] as const) put(p, x + ax, y + ay, mix(m.tint, 0x000000, 0.6))
+    for (const [fx, fy] of MINI_JOY) put(p, x + fx, y + fy, MINI_INK)
+    put(p, x + 3, y + 6, TONGUE)
+    put(p, x + 4, y + 6, TONGUE)
+    // A twinkle off one shoulder, then the other: clear of the feelers, never a cross on its head.
+    const beat = step(t, 200) % 3
+    if (beat !== 1) stamp(p, beat === 0 ? x + 6 : x - 1, y - 4, SPARKLE, { '#': 0xffe14d, W: WHITE })
+    return
+  }
+  const dy = m.t < 300 ? pick(MINI_HOP, step(m.t, 75)) : step(m.t + seed * 97, 300) % 2
+  const y = top + dy
+  stamp(p, x, y, MINI_ART, miniPalette(m.tint, step(m.t + seed * 131, 400) % 2 === 0 ? 'a' : 'b'))
+  const glance = pick(MINI_GLANCE, step(m.t + seed * 211, 900))
+  for (const [fx, fy] of MINI_FACE) put(p, x + fx + glance, y + fy, MINI_INK)
+  if (m.icon) {
+    const gear = ICONS[m.icon]
+    const width = Math.max(...gear.rows.map(r => r.length))
+    stamp(p, x + Math.floor((MINI_W - width) / 2), y - gear.rows.length - 1, gear.rows, gear.colors)
+  }
+}
+
+/** A 3×5 numeral set for the strip's "+N". */
+const DIGITS: Readonly<Record<string, readonly string[]>> = {
+  '+': ['...', '.#.', '###', '.#.', '...'],
+  '0': ['###', '#.#', '#.#', '#.#', '###'],
+  '1': ['.#.', '##.', '.#.', '.#.', '###'],
+  '2': ['###', '..#', '###', '#..', '###'],
+  '3': ['###', '..#', '.##', '..#', '###'],
+  '4': ['#.#', '#.#', '###', '..#', '..#'],
+  '5': ['###', '#..', '###', '..#', '###'],
+  '6': ['###', '#..', '###', '#.#', '###'],
+  '7': ['###', '..#', '.#.', '.#.', '.#.'],
+  '8': ['###', '#.#', '###', '#.#', '###'],
+  '9': ['###', '#.#', '###', '..#', '###'],
+}
+const COUNT_INK = 0x8b95a8
+
+const countText = (hidden: number): string => `+${Math.min(hidden, 99)}`
+
+/** Columns the strip takes: nothing without minis, so the band is as it was. */
+export const squadWidth = (shown: number, hidden = 0): number =>
+  shown * MINI_SLOT + (hidden > 0 ? countText(hidden).length * 4 : 0)
+
+const drawSquad = (p: Pixels, x0: number, squad: readonly MiniView[], hidden: number): void => {
+  const floor = p.h - 1
+  squad.forEach((m, i) => drawMini(p, x0 + i * MINI_SLOT, floor, m))
+  if (hidden <= 0) return
+  let x = x0 + squad.length * MINI_SLOT
+  for (const ch of countText(hidden)) {
+    stamp(p, x, floor - 4, DIGITS[ch] ?? [], { '#': COUNT_INK })
+    x += 4
+  }
+}
+
+/** One mini on a canvas of its own, room left for its antenna, icon and jump. */
+export const renderMini = (m: MiniView): Pixels => {
+  const p = blank(MINI_W + 2, MINI_H + 7)
+  drawMini(p, 1, p.h - 1, m)
+  return p
+}
+
+// ---------------------------------------------------------------------------------------------
 // Body
 
 const drawBody = (p: Pixels, s: Species, ox: number, oy: number, palette: Readonly<Record<string, number>>, t: number): void => {
@@ -548,38 +849,72 @@ export const renderFrame = (input: FrameInput): Pixels => {
   const { mood, t } = input
   const s = input.isFlipped ? mirror(input.species) : input.species
   const layout = layoutFor(s, input.hat)
-  const p = blank(input.width ?? CANVAS_W, layout.h)
+  const width = input.width ?? CANVAS_W
+  const squad = input.squad ?? []
+  const hidden = input.hidden ?? 0
+  const p = blank(width + squadWidth(squad.length, hidden), layout.h)
   const spriteX = input.x ?? SPRITE_X
   const palette = input.isShiny ? s.shiny : s.palette
-  const look = pose(mood, t)
+  const squishT = input.squishT ?? null
+  const springT = squishT === null && input.reliefT != null && input.reliefT >= 0 && input.reliefT < SPRING_MS ? input.reliefT : null
+  const isPressed = squishT !== null
+  // Squished or springing back, the body is drawn alone, scaled about its feet, then the face.
+  const isScaled = isPressed || springT !== null
+  const look: Pose = isPressed
+    ? { dx: 0, dy: 0, eyes: 'closed', mouth: 'none', hasCheeks: false }
+    : springT !== null
+      ? { dx: 0, dy: springT < 160 ? 0 : springT < 320 ? -3 : -1, eyes: 'happy', mouth: 'open', hasCheeks: true }
+      : pose(mood, t)
   const { dx, eyes, mouth, hasCheeks } = look
-  const dy = Math.max(look.dy, -headroom(s, layout.y, input.hat))
+  const dy = Math.max(look.dy, -headroom(s, layout.y, input.hat, input.hasCap))
   const ox = spriteX + dx
   const oy = layout.y + dy
   const eyeColor = (input.isShiny && s.shinyEyeColor) || s.eyeColor
   const body = eyeColor === s.eyeColor ? s : { ...s, eyeColor }
 
-  if (mood === 'sad') drawRain(p, spriteX, s, t)
-  if (mood === 'celebrate') drawConfetti(p, t)
+  if (!isScaled && mood === 'sad') drawRain(p, spriteX, s, t)
+  if (!isScaled && mood === 'celebrate') drawConfetti(p, t)
 
-  drawBody(p, s, ox, oy, palette, t)
-  if (input.face === 'shades' && mood !== 'sleep' && mood !== 'sad') {
-    drawShades(p, body, ox, oy)
-  } else {
-    drawEyes(p, body, ox, oy, eyes, t)
+  const layer = isScaled ? blank(p.w, p.h) : p
+  drawBody(layer, s, ox, oy, palette, t)
+  if (!isPressed) {
+    if (input.face === 'shades' && mood !== 'sleep' && mood !== 'sad') {
+      drawShades(layer, body, ox, oy)
+    } else {
+      drawEyes(layer, body, ox, oy, eyes, t)
+    }
+    drawMouth(layer, body, ox, oy, mouth)
+    if (hasCheeks) drawCheeks(layer, s, ox, oy)
   }
-  drawMouth(p, body, ox, oy, mouth)
-  if (hasCheeks) drawCheeks(p, s, ox, oy)
 
   // The robot's antenna blinks while it thinks.
-  if (s.id === 'robot' && (mood === 'working' || mood === 'attention') && step(t, 300) % 2 === 1) {
+  if (!isScaled && s.id === 'robot' && (mood === 'working' || mood === 'attention') && step(t, 300) % 2 === 1) {
     put(p, ox + 7, oy, 0xfff1a8)
     put(p, ox + 8, oy, 0xfff1a8)
   }
-  if (input.isBlooming || (s.id === 'cactus' && (mood === 'celebrate' || mood === 'love'))) {
-    drawBloom(p, ox, oy, s)
+  if (input.hasCap) {
+    drawCap(layer, s, ox, oy, t)
+  } else if (input.isBlooming || (s.id === 'cactus' && (mood === 'celebrate' || mood === 'love'))) {
+    drawBloom(layer, ox, oy, s)
   } else if (input.hat) {
-    drawHat(p, s, ox, oy, input.hat, t)
+    drawHat(layer, s, ox, oy, input.hat, t)
+  }
+
+  if (isScaled) {
+    const cx = ox + 8
+    const floor = oy + 15
+    const [sx, stretch] = squashOf(squishT, springT)
+    // A stretch never lifts the top of the head (or a tall hat) off the canvas.
+    const top = topOf(layer)
+    const sy = stretch > 1 && floor > top ? Math.min(stretch, floor / (floor - top)) : stretch
+    scaleInto(p, layer, cx, floor, sx, sy)
+    if (isPressed) {
+      const map = (x: number, y: number): Point => [Math.floor(cx + (x + 0.5 - cx) * sx), Math.round(floor - (floor - y) * sy)]
+      drawStrain(p, body, ox, oy, map)
+      drawPress(p, cx, topOf(p))
+    }
+    if (squad.length > 0 || hidden > 0) drawSquad(p, width, squad, hidden)
+    return p
   }
 
   switch (mood) {
@@ -608,13 +943,16 @@ export const renderFrame = (input: FrameInput): Pixels => {
     default:
       break
   }
+  // The alarmed face sweats already; asleep, nothing worries it.
+  if (input.isSweating && mood !== 'alarmed' && mood !== 'sleep') drawBead(p, body, ox, oy, t)
   if (input.icon && (mood === 'working' || mood === 'idle' || mood === 'walk')) {
     const gear = ICONS[input.icon]
-    stamp(p, Math.min(p.w - 5, ox + s.head[0] + 5), Math.max(0, oy + s.head[1] - 3), gear.rows, gear.colors)
+    stamp(p, Math.min(width - 5, ox + s.head[0] + 5), Math.max(0, oy + s.head[1] - 3), gear.rows, gear.colors)
   }
   if (input.isShiny && step(t, 1700) % 3 === 0) {
     put(p, ox - 2, oy + 1 + (step(t, 200) % 2), 0xfff6a8)
   }
+  if (squad.length > 0 || hidden > 0) drawSquad(p, width, squad, hidden)
   return p
 }
 
