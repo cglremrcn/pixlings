@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { commandsOf, isTestCommand, riskOf, testOutcome } from '../hooks/lib/detect.ts'
+import { commandsOf, isTestCommand, riskOf, runsGitCommit, testOutcome } from '../hooks/lib/detect.ts'
 import { ticsIn } from '../hooks/lib/tics.ts'
 
 const labelOf = (command: string): string | null => riskOf(command)?.label ?? null
@@ -172,6 +172,21 @@ describe('the shell line', () => {
       ['git', 'commit', '-m', ''],
       ['git', 'push'],
     ])
+  })
+
+  test('a commit is a git commit at command position, not a mention of one', () => {
+    for (const cmd of [
+      'git commit -m "fix"',
+      'git -c user.name="a b" -c user.email=a@b commit -q -m x',
+      '/usr/bin/git -C repo commit -am "y"',
+      'cd api && git add . && git commit -m "z"',
+      "git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\"",
+    ]) {
+      expect([cmd, runsGitCommit(cmd)]).toEqual([cmd, true])
+    }
+    for (const cmd of ['echo "git commit"', 'git log --grep commit', 'grep -rn "git commit" docs', 'git show HEAD -- commit.ts']) {
+      expect([cmd, runsGitCommit(cmd)]).toEqual([cmd, false])
+    }
   })
 })
 

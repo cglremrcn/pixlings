@@ -446,9 +446,15 @@ const psSwitch = (args: readonly string[], name: string, min: number): boolean =
     return word.length > min && word.startsWith('-') && name.startsWith(word.slice(1))
   })
 
-const gitRisks = (args: readonly string[], found: Set<Risk>): void => {
+/** Where git's subcommand sits among its arguments, past options like `-C dir` and `-c key=value`. */
+const gitVerbAt = (args: readonly string[]): number => {
   let i = 0
   while ((args[i] ?? '').startsWith('-')) i += /^(?:-C|-c|--git-dir|--work-tree|--namespace)$/.test(args[i] ?? '') ? 2 : 1
+  return i
+}
+
+const gitRisks = (args: readonly string[], found: Set<Risk>): void => {
+  const i = gitVerbAt(args)
   const rest = args.slice(i + 1)
   const has = (long: string, short: string): boolean =>
     rest.some(a => a === long || (short !== '' && isCluster(a, short)))
@@ -643,6 +649,15 @@ const runsTests = (argv: readonly string[], depth = 0, program = programOf(argv[
 
 export const isTestCommand = (command: string): boolean =>
   parsed(command).some(pipeline => pipeline.some(c => runsTests(c.argv, 0, c.program)))
+
+/** Whether the line runs `git commit`, not merely mentions it as `echo "git commit"` does. */
+export const runsGitCommit = (command: string): boolean =>
+  parsed(command).some(pipeline =>
+    pipeline.some(c => {
+      const args = c.argv.slice(1)
+      return c.program === 'git' && args[gitVerbAt(args)] === 'commit'
+    }),
+  )
 
 export type TestOutcome = { status: 'pass' | 'fail'; passed: number | null; failed: number | null }
 

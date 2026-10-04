@@ -8,7 +8,7 @@ import type { Bubble, Held } from './lib/brain.ts'
 import { CARD_BG, CARD_SCALE, renderCard, shareText } from './lib/card.ts'
 import { CANVAS_W, HATCH_MS, renderFrame, renderHatch, renderSilhouette, samePixels, SPRITE_X } from './lib/canvas.ts'
 import type { Face, Hat, Icon, Mood, Pixels } from './lib/canvas.ts'
-import { blockingWindow, clockTime, formatDuration, iconFor, isTestCommand, riskOf, testOutcome } from './lib/detect.ts'
+import { blockingWindow, clockTime, formatDuration, iconFor, isTestCommand, riskOf, runsGitCommit, testOutcome } from './lib/detect.ts'
 import type { LimitWindow, Risk } from './lib/detect.ts'
 import { say } from './lib/lines.ts'
 import type { LineKey, Slots } from './lib/lines.ts'
@@ -945,7 +945,7 @@ export const register: Register = (on, options) => {
     } else if (git?.push) {
       await express({ mood: 'happy', priority: PRIORITY.commit, line: 'push', slots: { branch: git.push.branch }, sound: 'push' })
       await grant('push', 'pushes')
-    } else if (git?.commit || /\bgit\s+commit\b/.test(command)) {
+    } else if (git?.commit || runsGitCommit(command)) {
       await express({ mood: 'happy', priority: PRIORITY.commit, line: 'commit', sound: 'commit' })
       tally('commits')
       await grant('commit', 'commits')
