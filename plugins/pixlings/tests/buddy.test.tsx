@@ -3,7 +3,7 @@ import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { test } from './kit.ts'
-import { adopt, cleanName, companionOf, configPath, epochMs, readFileArgv, speciesNamed } from '../hooks/lib/buddy.ts'
+import { adopt, cleanName, companionOf, configPath, epochMs, speciesNamed } from '../hooks/lib/buddy.ts'
 import { oneLine, personaFor, personasOf, TEMPLATE_MAX } from '../hooks/lib/persona.ts'
 import { daysTogether, hatchPixling, mergeSave, rehatch, revive } from '../hooks/lib/progress.ts'
 import type { Pixling } from '../hooks/lib/progress.ts'
@@ -72,8 +72,10 @@ type HostOptions = {
   stored?: unknown
   away?: boolean
   env?: Record<string, string>
-  /** What `$.fs.read` answers for a path; a throw stands for a refusal. */
+  /** What `$.fs.read` answers for a path; with none the file is missing. */
   read?: (path: string) => string
+  /** Why `$.fs.read` rejects, as the engine words it (too large, refused by a hook). */
+  refuse?: string
   /** A host process's standard output, by its argv. */
   stdout?: (argv: readonly string[]) => string
   /** What `$.model.complete` resolves; a throw rejects it. */
@@ -107,7 +109,8 @@ const host = (on: On, o: HostOptions = {}) => {
   })
   on('fs.read', ($, e) => {
     reads.push(e.path)
-    if (!o.read) throw new Error('ENOENT')
+    if (o.refuse) return { deny: o.refuse } as never
+    if (!o.read) return { deny: `ENOENT: no such file or directory, open '${e.path}'` } as never
     return { value: o.read(e.path) } as never
   })
   on('model.complete', ($, e) => {
@@ -238,17 +241,6 @@ describe('reading the old /buddy', () => {
     expect(configPath('/home/t', '/opt/claude-config', false)).toBe('/opt/claude-config/.claude.json')
   })
 
-  test('the host reader: PowerShell writes UTF-8, takes the path from the environment, never bypasses the policy', () => {
-    const win = readFileArgv('windows', "C:\\Users\\o'brien\\.claude.json")
-    expect(win.argv[0]).toBe('powershell.exe')
-    expect(win.argv).toContain('-NoProfile')
-    expect(win.argv).not.toContain('-ExecutionPolicy')
-    expect(win.argv.at(-1)).toContain('UTF8Encoding $false')
-    expect(win.argv.at(-1)).toContain('-LiteralPath $env:PIXLING_IN')
-    expect(win.argv.join(' ')).not.toContain("o'brien")
-    expect(win.env).toEqual({ PIXLING_IN: "C:\\Users\\o'brien\\.claude.json" })
-    expect(readFileArgv('linux', '/home/t/.claude.json')).toEqual({ argv: ['cat', '--', '/home/t/.claude.json'], env: {} })
-  })
 })
 
 describe('adoption keeps what is the person’s', () => {
@@ -376,7 +368,9 @@ describe('/pixling adopt', () => {
     expect(asked[0]).toMatch(/badges, streak, tics and dex are kept\. Adopt Pebblet\?$/)
     expect(out.text).toContain('Pebblet is back!')
     expect(out.text).toContain('276 day(s) together')
-    expect(out.text).toMatch(/read locally/i)
+    expect(out.text).toMatch(/Read on this machine/)
+    expect(out.text).toMatch(/sends nothing anywhere itself/)
+    expect(out.text).toMatch(/part of the conversation Claude reads/)
     expect(await bubbleText($)).toMatch(/Pebblet is back!/)
     expect(await state($, 'persona')).toBe(COMPANION.personality)
     await clock.advance(1000)
@@ -398,20 +392,33 @@ describe('/pixling adopt', () => {
     expect(card.text).toContain('Adopted from your old /buddy: 276 day(s) together')
   })
 
-  test('a refused read falls back to the host reader, with the path in its environment', async ($, on) => {
-    const { clock, db, ran } = host(on, {
-      stored: DUCK,
-      stdout: argv => (argv.join(' ').includes('Get-Content') ? CONFIG : ''),
-    })
+  test('with quips on, it says the personality goes into each quip', { options: { quips: 'haiku' } }, async ($, on) => {
+    const { clock } = host(on, { stored: DUCK, read: path => (path === CONFIG_PATH ? CONFIG : '') })
     answering(on, 'Bring Pebblet back')
     await $.session.start(START)
     await clock.advance(3000)
     const out = await $.command.run({ command: 'pixling', args: 'adopt' } as never)
     expect(out.text).toContain('Pebblet is back!')
-    const reader = ran.find(r => r.argv.join(' ').includes('Get-Content'))
-    expect(reader?.init?.env).toEqual({ PIXLING_IN: CONFIG_PATH })
+    expect(out.text).toMatch(/personality is part of each quip’s request to Claude Haiku/)
+    expect(out.text).not.toMatch(/sends nothing anywhere/)
+  })
+
+  test('a read the engine refuses (too large, say) is reported as such, and nothing else reads it', async ($, on) => {
+    const { clock, db, ran } = host(on, {
+      stored: DUCK,
+      refuse: 'the file is over 4 MiB',
+      stdout: () => CONFIG,
+    })
+    answering(on, 'Bring Pebblet back')
+    await $.session.start(START)
+    await clock.advance(3000)
+    const out = await $.command.run({ command: 'pixling', args: 'adopt' } as never)
+    expect(out.text).toContain(`Could not read ${CONFIG_PATH}:`)
+    expect(out.text).toContain('the file is over 4 MiB')
+    expect(out.text).not.toMatch(/found none|is back/)
+    expect(ran.filter(r => r.argv.join(' ').includes('Get-Content') || r.argv[0] === 'cat')).toEqual([])
     await clock.advance(1000)
-    expect((db.get('pixling') as Pixling).name).toBe('Pebblet')
+    expect((db.get('pixling') as Pixling).name).toBe('Quackers')
   })
 
   test('CLAUDE_CONFIG_DIR moves where it looks', async ($, on) => {
@@ -431,7 +438,8 @@ describe('/pixling adopt', () => {
     expect(out.text).toContain('No old /buddy companion')
     expect(out.text).toContain(CONFIG_PATH)
     expect(out.text).toContain('"companion"')
-    expect(out.text).toMatch(/read locally/i)
+    expect(out.text).toMatch(/Read on this machine/)
+    expect(out.text).toMatch(/part of the conversation Claude reads/)
     expect(asked).toEqual([])
     await clock.advance(1000)
     expect((db.get('pixling') as Pixling).name).toBe('Quackers')

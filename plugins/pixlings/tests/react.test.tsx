@@ -316,6 +316,20 @@ describe('context sweat', () => {
     await clock.advance(100)
     expect((await band($)).text).toMatch(line)
   })
+
+  test('a /clear starts a new conversation: the old fill and its sweat go with the old one', { timeoutMs: LONG }, async ($, on) => {
+    const { clock } = host(on)
+    await $.session.start(START)
+    await clock.advance(3000)
+    await $.session.measure(measure(91))
+    await clock.advance(100)
+    expect((await band($)).has(BEAD)).toBe(true)
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+    await clock.advance(100)
+    const fresh = await band($)
+    expect(fresh.has(BEAD)).toBe(false)
+    expect(fresh.text).not.toContain('ctx 91%')
+  })
 })
 
 describe('plan mode', () => {

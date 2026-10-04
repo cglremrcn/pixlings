@@ -363,7 +363,9 @@ describe('files and voice', () => {
 
   test('speech reads plain text from standard input or argv', () => {
     expect(windowsSpeech().at(-1)).toContain('[Console]::In.ReadToEnd()')
-    expect(linuxSpeaker('/usr/bin/spd-say\n')?.('hi')).toEqual(['/usr/bin/spd-say', '--wait', 'hi'])
+    expect(linuxSpeaker('/usr/bin/spd-say\n')?.('hi')).toEqual(['/usr/bin/spd-say', '--wait', '--', 'hi'])
+    // A line that looks like an option is said, never obeyed.
+    expect(linuxSpeaker('/usr/bin/espeak-ng\n')?.('-w /tmp/x hi')).toEqual(['/usr/bin/espeak-ng', '--', '-w /tmp/x hi'])
     expect(linuxSpeaker('')).toBeNull()
     expect(speakable('Day 4 in a row. 🔥  *bows*')).toBe('Day 4 in a row. bows')
   })

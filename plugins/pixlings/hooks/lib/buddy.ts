@@ -4,8 +4,6 @@
 // fields are ever kept from it. The file's text is parsed here and dropped, never printed,
 // stored or sent, and a parse error is not passed on (an engine's message can quote the text).
 
-import { POWERSHELL, PS_FLAGS } from './platform.ts'
-import type { Platform } from './platform.ts'
 import { oneLine } from './persona.ts'
 import type { Pixling } from './progress.ts'
 import { SPECIES } from './sprites.ts'
@@ -65,23 +63,6 @@ export const companionOf = (text: string): Companion | null => {
   const personality = typeof c['personality'] === 'string' ? oneLine(c['personality']) : ''
   return { name, personality: personality || null, hatchedAt: epochMs(c['hatchedAt']) }
 }
-
-/**
- * A process that prints the file named by `PIXLING_IN`, for when the engine's own read is
- * refused. PowerShell is told to write UTF-8 without a byte-order mark: its default is the
- * console's code page, which would mangle a name like "Çiçek".
- */
-export const readFileArgv = (platform: Platform, path: string): { argv: string[]; env: Record<string, string> } =>
-  platform === 'windows'
-    ? {
-        argv: [
-          POWERSHELL,
-          ...PS_FLAGS,
-          '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; [Console]::Out.Write((Get-Content -Raw -Encoding UTF8 -LiteralPath $env:PIXLING_IN))',
-        ],
-        env: { PIXLING_IN: path },
-      }
-    : { argv: ['cat', '--', path], env: {} }
 
 /**
  * The pixling taking the companion in: its name, its personality (a template's stays when the

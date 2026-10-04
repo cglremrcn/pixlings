@@ -123,11 +123,11 @@ All in `/config`, under Pixlings.
 
 **Does it eat my context or my tokens?** No. Nothing it draws, plays or tracks goes into Claude's prompt, and out of the box it never calls a model: `claude plugin details pixlings@pixlings` reports about 0 always-on tokens. What a `/pixling` command prints lands in the transcript like any command output (a few tokens, about 450 for `/pixling badges`), and auto-continue sends one short prompt after a limit reset. Turn `quips` to `haiku` and it asks Claude Haiku for a line now and then: at most once a minute, about a hundred tokens each, and every quip shows what it cost.
 
-**What does `/pixling adopt` read?** Claude Code kept your Buddy in its config file, `~/.claude.json` (or the one in `CLAUDE_CONFIG_DIR`). Pixlings reads that file on your machine and keeps three things from it: the companion's name, its personality and when it hatched. Nothing else is kept, shown or sent anywhere.
+**What does `/pixling adopt` read?** Claude Code kept your Buddy in its config file, `~/.claude.json` (or the one in `CLAUDE_CONFIG_DIR`). Pixlings reads that file on your machine and keeps three things from it: the companion's name, its personality and when it hatched. Nothing else is kept. Pixlings sends nothing anywhere itself, but the reply to `/pixling adopt` names your Buddy and its personality, and like any command's output it is part of the conversation Claude reads. With `quips` on, the personality is also part of each quip's request (below).
 
 **Does it send anything anywhere?** No network requests of its own. Its save lives in Claude Code's plugin store on your machine. With `quips` on, the quip request goes through Claude Code to Claude Haiku and holds only your pixling's name, species and personality and what happened in numbers ("3 tests just failed"): never your code, your prompts or your files.
 
-**Will the cache guard get in my way?** It asks only when you switch models in a session where someone can answer, the cache is still warm, and writing it again on the new model would cost more than about $0.25. Answer and the switch goes on.
+**Will the cache guard get in my way?** It asks only when you switch models yourself (with `/model`, the `/config` row or the model picker; a switch made through the SDK, Remote Control or an IDE goes through), the cache is still warm, and writing it again on the new model would cost more than about $0.25. Answer and the switch goes on.
 
 **Is it heavy?** Drawing a frame takes about 0.04 ms, ten times a second. Each sound plays in a short-lived process; on Windows that is a PowerShell that lives for about a second.
 

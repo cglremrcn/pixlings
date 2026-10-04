@@ -17,9 +17,10 @@ type Pattern = { readonly tic: Tic; readonly re: RegExp; readonly label: string 
 const PATTERNS: readonly Pattern[] = [
   { tic: 'absolutelyRight', re: /\byou(?:['’]| a)re (?:absolutely|totally|completely|exactly) (?:right|correct)\b/gi, label: '"You\'re absolutely right"' },
   // Praise standing on its own ("Great question!", "That's a good catch."), not "a good point to add".
+  // The blanks before it are bounded: an unbounded run makes a long stretch of them quadratic.
   {
     tic: 'greatQuestion',
-    re: /(?<=^|[.!?]\s+|\b(?:that['’]?s|that is|what|such) an? )(?:great|excellent|good) (?:question|catch|point)(?=\s*(?:[!.,;:—–]|-\s|$))/gim,
+    re: /(?<=^|[.!?]\s{1,3}|\b(?:that['’]?s|that is|what|such) an? )(?:great|excellent|good) (?:question|catch|point)(?=\s*(?:[!.,;:—–]|-\s|$))/gim,
     label: '"Great question"',
   },
   {
@@ -27,7 +28,7 @@ const PATTERNS: readonly Pattern[] = [
     re: /\b(?:apologi[sz]e|apologies|sorry) for (?:the|any|my) (?:confusion|oversight|mistake|error)s?\b/gi,
     label: '"Apologies for the confusion"',
   },
-  { tic: 'perfect', re: /(?:^|\n)\s*(?:Perfect|Excellent)[!.]/g, label: '"Perfect!"' },
+  { tic: 'perfect', re: /^[ \t]*(?:Perfect|Excellent)[!.]/gm, label: '"Perfect!"' },
   { tic: 'issue', re: /\bI (?:see|found|spotted) the (?:issue|problem)\b/gi, label: '"I see the issue"' },
   { tic: 'loadBearing', re: /\bload[- ]bearing\b/gi, label: '"load-bearing"' },
   { tic: 'productionReady', re: /\bproduction[- ]ready\b/gi, label: '"production-ready"' },

@@ -4,11 +4,11 @@
 
 ### New
 
-- **Bring back your Buddy.** `/pixling adopt` reads the companion Claude Code's retired `/buddy` left in `~/.claude.json` and adopts its name, personality and hatch date (the days together count from it). Only those three fields are kept; nothing is sent anywhere. `/pixling adopt <species>` changes its body too. `/buddy`, `/buddy pet`, `/buddy off` and `/buddy on` work as aliases.
+- **Bring back your Buddy.** `/pixling adopt` reads the companion Claude Code's retired `/buddy` left in `~/.claude.json` and adopts its name, personality and hatch date (the days together count from it). Only those three fields are kept, and Pixlings sends them nowhere itself; but the reply names your Buddy and its personality, and like any command's output it is part of the conversation Claude reads. With `quips: haiku`, the personality is part of each quip's request. `/pixling adopt <species>` changes its body too. `/buddy`, `/buddy pet`, `/buddy off` and `/buddy on` work as aliases.
 - **Personalities.** Every pixling hatches with a one-line personality, written from templates (no model call). Old saves get one too, the same every session.
 - **Six new species:** capybara, turtle, snail, penguin, goose and rabbit, fifteen in all. Each tier is now rarer than the one below it.
 - **The subagent squad.** Every subagent Claude starts gets a small helper beside the pixling, tinted by agent type and carrying that agent's tools. When it finishes it jumps for joy and goes.
-- **The cache guard.** Before a `/model` switch throws away a warm prompt cache that would cost more than about $0.25 to write again on the new model, the pixling asks (`cacheGuard`, on by default; never in headless or SDK runs).
+- **The cache guard.** Before a `/model` switch throws away a warm prompt cache that would cost more than about $0.25 to write again on the new model, the pixling asks (`cacheGuard`, on by default). It asks only about a switch you make with `/model`, the `/config` row or the model picker, never one made through the SDK, Remote Control or an IDE.
 - **A model switch names the cache lifetime.** The countdown stops guessing after a `/model` switch.
 - **More reactions.** Squished under a press during compaction and springing back after; sweating once the context passes 85%; a thinking cap in plan mode.
 - **More vitals.** How much of a rate-limit window the last turn used (`turn +2%`), and the model and effort (`opus 5.5 · high`).
@@ -24,7 +24,9 @@
 - Two sessions open at once no longer overwrite each other's save; their changes are merged.
 - Typing free text into the release dialog no longer releases the pixling; only the exact choice does.
 - A save that can't be read is backed up and never overwritten; the session runs on a stand-in.
-- `claude -p` and SDK runs hatch no egg and make no sound, voice or notification.
+- `claude -p` and SDK runs that nothing shows hatch no egg and make no sound, voice or notification; once a surface attaches, as VS Code and the desktop app do, the pixling wakes.
+- After `/clear`, the context reading starts over with the new conversation.
+- Linux: a line that starts with a dash is spoken, not taken for an option of `espeak` or `spd-say`.
 - Risky commands are read the way a shell reads them: quoted text, heredocs and commit messages no longer trigger the alarm, and spellings like `rm -Rf`, `rm -r --force` and `DELETE FROM schema.table` are caught. A commit that is only mentioned (`echo "git commit"`) no longer counts, and a line that commits and then tests counts both.
 - The hour-long cache lifetime is learned only from two near-full hits after long pauses, unlearned by a full miss, and expires from the save after two weeks.
 - The cache warning fires even when the band or the vitals are off.

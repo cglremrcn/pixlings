@@ -451,6 +451,18 @@ describe('a -p or SDK run', () => {
     expect(now.stats.turns).toBe(1)
   })
 
+  test('a nap in a run nobody watches never continues on its own', { plugins: [SLOW], timeoutMs: LONG }, async ($, on) => {
+    const { clock, submitted } = host(on, DUCK)
+    const resetsAt = NOON + 5 * MIN
+    usage(on, fullUntil(resetsAt))
+    await $.session.start({ cwd: '/repo', surface: null, isInteractive: false } as never)
+    await clock.advance(10_000)
+    await $.classic.StopFailure({ error: 'rate_limit' })
+    await clock.set(resetsAt + 30_000)
+    await clock.settle()
+    expect(continues(submitted)).toEqual([])
+  })
+
   test('does not hatch the first egg where nobody can see it', async ($, on) => {
     const { clock, ran, db } = host(on)
     await $.session.start({ cwd: '/repo', surface: null, isInteractive: false } as never)

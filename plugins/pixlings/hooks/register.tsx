@@ -6,7 +6,7 @@ import type { PixlingsPersona } from '../types'
 import { award, BADGES, countDay, earnedBadges, localDate, recapLine, touchDay } from './lib/badges.ts'
 import { baseMood, holdFor, moodNow, PRIORITY, react, speak } from './lib/brain.ts'
 import type { Bubble, Held } from './lib/brain.ts'
-import { adopt, companionOf, configPath, readFileArgv, speciesNamed } from './lib/buddy.ts'
+import { adopt, companionOf, configPath, speciesNamed } from './lib/buddy.ts'
 import type { Companion } from './lib/buddy.ts'
 import { CARD_BG, CARD_SCALE, renderCard, shareText } from './lib/card.ts'
 import { CANVAS_W, HATCH_MS, MINI_LEAVE_MS, MINI_POOF_MS, miniTint, renderFrame, renderHatch, renderSilhouette, samePixels, SPRITE_X, SQUAD_CAP, squadWidth } from './lib/canvas.ts'
@@ -50,7 +50,7 @@ import type { Day, Pixling, Stats, XpEvent } from './lib/progress.ts'
 import { base64, rasterOf, rowsFor, toSvg } from './lib/raster.ts'
 import { isWalking, newWalker, roamRange, walk } from './lib/roam.ts'
 import type { RoamMode, Walker } from './lib/roam.ts'
-import { briefLine, cardLines, drawRoom, personaLine, seatOf, tabOf } from './lib/room.ts'
+import { ROOM_EGG_KEY, ROOM_SPRITE_KEY, briefLine, cardLines, drawRoom, personaLine, seatOf, tabOf } from './lib/room.ts'
 import type { RoomActions, RoomModel } from './lib/room.ts'
 import { RARITY_COLOR, RARITY_STARS, SPECIES, speciesById } from './lib/sprites.ts'
 import type { Species } from './lib/sprites.ts'
@@ -203,7 +203,7 @@ type Io = {
   playAsset: (asset: string) => Promise<void>
   toast: (text: string, timeoutMs: number) => void
   invalidate: () => void
-  blit: (requestId: string, cells: string) => Promise<boolean>
+  blit: (requestId: string, key: string, cells: string) => Promise<boolean>
   usage: () => Promise<readonly LimitWindow[]>
   submit: (text: string) => Promise<void>
   setVitals: (value: PixlingsVital[]) => Promise<void>
@@ -257,11 +257,15 @@ export const register: Register = (on, options) => {
   let nap: PixlingsNap = null
   let napTimer: Timer | null = null
   let napRetries = 0
+  /** Counts cancellations: a wake that is still on its way checks it before it says continue. */
+  let napEpoch = 0
   let bandId: string | null = null
   let bandRows = 0
   let lastFrame: Pixels | null = null
   let svgSeenAt = 0
   let lastInvalidate = 0
+  /** The room's sprite as a terminal shows it, by its key: the frame clock repaints it in place. */
+  let roomSprite: { key: string; columns: number; rows: number; cells: string } | null = null
   let lastSoundAt = 0
   let lastTest: 'pass' | 'fail' | null = null
   let lastFailed: number | null = null
@@ -285,7 +289,11 @@ export const register: Register = (on, options) => {
   let lastSpokenAt = 0
   let voicePipe: string[] | null = null
   let voiceUntil = 0
-  /** A `-p` or SDK run: nobody watches, so nothing is shown, played or said; stats still count. */
+  /**
+   * Nobody watches: a `-p` run, or an SDK run with no surface attached. Nothing is shown, played
+   * or said, and stats still count. An SDK host that draws (the desktop app, VS Code) attaches a
+   * surface, at the start or later, and the session is watched from then on.
+   */
   let isQuiet = false
   /** The pixling as this session loaded or last wrote it: what its own changes are counted from. */
   let savedAs: Pixling | null = null
@@ -733,6 +741,23 @@ export const register: Register = (on, options) => {
     })
   }
 
+  // The terminal's room repaints its sprite in place, as the band does: a redraw would re-run
+  // every hook of this plugin's on what it drew, a heckled transcript's messages too. A new size
+  // is the one redraw, after which the room says what it shows again.
+  const paintRoom = async (port: Io, t: number): Promise<void> => {
+    const sprite = roomSprite
+    if (!sprite) return
+    const raster = rasterOf(roomFrame(t))
+    if (raster.cells === sprite.cells) return
+    if (raster.columns !== sprite.columns || raster.rows !== sprite.rows) {
+      roomSprite = null
+      port.invalidate()
+      return
+    }
+    roomSprite = { ...sprite, cells: raster.cells }
+    if (!(await port.blit(ROOM_ID, sprite.key, raster.cells))) roomSprite = null
+  }
+
   const tick = async (): Promise<void> => {
     const port = io
     if (!port || !pixling) return
@@ -744,6 +769,7 @@ export const register: Register = (on, options) => {
       await refreshVitals(t)
       await warnCooling(t)
     }
+    await paintRoom(port, t)
     if (bandMode === 'minimal' || isCramped) {
       await syncMinimal()
       return
@@ -758,7 +784,7 @@ export const register: Register = (on, options) => {
       return
     }
     if (bandId && bandRows * 2 >= frame.h) {
-      const isShown = await port.blit(bandId, rasterOf(frame).cells)
+      const isShown = await port.blit(bandId, RASTER_KEY, rasterOf(frame).cells)
       if (!isShown) bandId = null
     }
     // Surfaces without Raster draw an SVG: redraw them a few times a second.
@@ -880,6 +906,7 @@ export const register: Register = (on, options) => {
       return
     }
     const isSure = asleep.until !== null || (windows.length > 0 && !still)
+    const epoch = napEpoch
     nap = null
     napTimer = null
     await port.setNap(null)
@@ -902,7 +929,8 @@ export const register: Register = (on, options) => {
       napRetries += 1
       await express({ mood: 'attention', priority: PRIORITY.wake, holdMs: 4000, text: shouldContinue ? RETRY_LINE : MAYBE_LINE, sound: 'wake' })
     }
-    if (shouldContinue) {
+    // A prompt, a /clear or a resume that came while it woke up still cancels the continue.
+    if (shouldContinue && napEpoch === epoch) {
       // A session that cannot take a prompt now keeps the reminder in the bubble.
       await port.submit(CONTINUE_PROMPT).catch(() => undefined)
     }
@@ -910,6 +938,7 @@ export const register: Register = (on, options) => {
 
   const cancelNap = async (): Promise<void> => {
     napRetries = 0
+    napEpoch += 1
     if (!io || !nap) return
     napTimer?.cancel()
     napTimer = null
@@ -997,6 +1026,16 @@ export const register: Register = (on, options) => {
   }
 
   // Session -------------------------------------------------------------------------------
+
+  /** Finds out where the session runs and how to play sound there; nothing plays when it can't. */
+  const detectPlatform = async (port: Io, os: string | undefined, root: string): Promise<void> => {
+    try {
+      platform = os === 'Windows_NT' ? 'windows' : platformOfUname(await port.run(['uname', '-sr'], 5000))
+      await choosePlayer(port, root)
+    } catch {
+      player = { kind: 'none' }
+    }
+  }
 
   const choosePlayer = async (port: Io, root: string): Promise<void> => {
     soundRoot = root
@@ -1237,7 +1276,7 @@ export const register: Register = (on, options) => {
       },
       toast: (text, timeoutMs) => $.ui.toast(text, { timeoutMs }),
       invalidate: () => $.ui.invalidate('ui.render'),
-      blit: async (requestId, cells) => (await $.ui.blit({ requestId, key: RASTER_KEY, cells })).deny === undefined,
+      blit: async (requestId, key, cells) => (await $.ui.blit({ requestId, key, cells })).deny === undefined,
       usage: async () => (await $.session.usage()).rateLimits,
       submit: async text => {
         await $.prompt.submit({ text })
@@ -1271,20 +1310,14 @@ export const register: Register = (on, options) => {
         await update($, effectAtom, () => value)
       },
     }
-    isQuiet = !e.isInteractive
+    // The REPL has a person at the prompt; an SDK host that draws has a surface attached.
+    const surfaces = await $.session.surfaces().catch(() => [])
+    isQuiet = !e.isInteractive && surfaces.length === 0
     await syncClock(port)
     lastActivity = now()
     baseSince = now()
 
-    const os = await $.env.get('OS')
-    if (!isQuiet) {
-      try {
-        platform = os === 'Windows_NT' ? 'windows' : platformOfUname(await port.run(['uname', '-sr'], 5000))
-        await choosePlayer(port, $.plugin.root)
-      } catch {
-        player = { kind: 'none' }
-      }
-    }
+    if (!isQuiet) await detectPlatform(port, await $.env.get('OS'), $.plugin.root)
 
     // The cache's lifetime: the person's setting, else what a past session learned or a model
     // switch named while it is still trusted, else 5m. 0.2's bare '5m' or '1h' carries no date,
@@ -1370,15 +1403,35 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // An SDK host (the desktop app, VS Code) starts unwatched and attaches a surface when it first
+  // draws: from then on the pixling is seen, so it animates, plays, notifies and hatches.
+  on('session.attach', async ($, e, next) => {
+    const port = io
+    if (isQuiet && port) {
+      isQuiet = false
+      await detectPlatform(port, await $.env.get('OS'), $.plugin.root)
+      $.clock.every(FRAME_MS, () => {
+        void tick()
+      })
+      if (!pixling) await hatch()
+    }
+    return next(e)
+  })
+
   on('session.end', async ($, e, next) => {
     // The conversation is over (a /clear or a resume goes on under another id): so is its nap,
-    // its plan mode, its compaction and its squad.
+    // its plan mode, its compaction, its squad, and the fill of its context with the sweat.
     await cancelNap().catch(() => undefined)
     squad = []
     isPlanning = false
     compactingSince = null
+    relievedAt = null
+    contextPercent = null
+    hasSweated = false
     await publishSquad()
     await stage?.isPlanning(false).catch(() => undefined)
+    await stage?.effect(null).catch(() => undefined)
+    await refreshVitals(now()).catch(() => undefined)
     await commit()
     return next(e)
   })
@@ -1672,7 +1725,6 @@ export const register: Register = (on, options) => {
    */
   type AdoptIo = {
     read: (path: string) => Promise<string>
-    run: (argv: string[], env: Record<string, string>) => Promise<{ exitCode: number; stdout: string; isStdoutTruncated: boolean }>
     ask: (question: string, labels: readonly string[]) => Promise<string>
     os: () => Promise<string | undefined>
     home: () => Promise<string | undefined>
@@ -1757,22 +1809,28 @@ export const register: Register = (on, options) => {
   }
 
   /** Reads the old /buddy's companion: the engine's read, else the host's own reader. */
-  const readCompanion = async (port: AdoptIo, path: string, isWindows: boolean): Promise<Companion | null> => {
+  /**
+   * The companion in the config file, or why the file could not be read. A refused read stays
+   * refused: the file holds credentials, and a hook that keeps plugins out of it has the last word.
+   */
+  const readCompanion = async (port: AdoptIo, path: string): Promise<{ companion: Companion | null } | { failed: string }> => {
+    let text: string
     try {
-      return companionOf(await port.read(path))
-    } catch {
-      // Refused or missing: the host process reads it instead.
+      text = await port.read(path)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      return /ENOENT|no such file|not found/i.test(reason) ? { companion: null } : { failed: reason }
     }
-    try {
-      const { argv, env } = readFileArgv(isWindows ? 'windows' : 'linux', path)
-      const ran = await port.run(argv, env)
-      return ran.exitCode === 0 && !ran.isStdoutTruncated ? companionOf(ran.stdout) : null
-    } catch {
-      return null
-    }
+    return { companion: companionOf(text) }
   }
 
-  const LOCAL_NOTE = 'The file was read locally; only the companion’s name, personality and hatch date were kept, and nothing was sent anywhere.'
+  const LOCAL_NOTE = [
+    'Read on this machine; only the companion’s name, personality and hatch date were kept.',
+    quipMode === 'haiku'
+      ? 'With quips on, the personality is part of each quip’s request to Claude Haiku.'
+      : 'Pixlings sends nothing anywhere itself.',
+    'Like any command’s output, this reply is part of the conversation Claude reads.',
+  ].join(' ')
 
   const adoptBuddy = async (port: AdoptIo, arg: string): Promise<{ text: string }> => {
     const was = pixling
@@ -1788,7 +1846,11 @@ export const register: Register = (on, options) => {
     const configDir = await port.configDir()
     if (!home && !configDir) return { text: 'Could not find your home folder to look for your old /buddy in.' }
     const path = configPath(home ?? '', configDir, isWindows)
-    const found = await readCompanion(port, path, isWindows)
+    const read = await readCompanion(port, path)
+    if ('failed' in read) {
+      return { text: [`Could not read ${path}: ${read.failed}`, `Nothing changed. ${was.name} is here, though. ♥`].join('\n') }
+    }
+    const found = read.companion
     if (!found) {
       return {
         text: [
@@ -1829,7 +1891,11 @@ export const register: Register = (on, options) => {
   const switchAway = async (port: AwayIo, away: boolean): Promise<{ text: string }> => {
     const p = pixling
     if (!p) return { text: 'Your egg has not hatched yet.' }
-    if (away === isAway) return { text: away ? `${p.name} is already away. /pixling on brings it back.` : `${p.name} is right here. ♥` }
+    // Saved either way: another session may have changed the kept choice since this one read it.
+    if (away === isAway) {
+      await port.save(away)
+      return { text: away ? `${p.name} is already away. /pixling on brings it back.` : `${p.name} is right here. ♥` }
+    }
     isAway = away
     if (away && nap?.isAuto) {
       // Away means nobody to wake Claude for: the nap goes on without the auto-continue.
@@ -1919,7 +1985,6 @@ export const register: Register = (on, options) => {
         return adoptBuddy(
           {
             read: path => $.fs.read(path),
-            run: (argv, env) => $.process.run(argv, { env, timeoutMs: 15_000 }),
             ask: (question, labels) => $.ui.ask(question, labels),
             os: () => $.env.get('OS'),
             home: () => $.env.get('HOME'),
@@ -2385,8 +2450,14 @@ export const register: Register = (on, options) => {
     const isEgg = !pixling || isHatching(at)
     const columns = e.props.bodyColumns > 0 ? e.props.bodyColumns : (e.viewport?.columns ?? 40)
     const seat = seatOf(columns, e.surface === 'terminal', frame.w)
-    // The pixling moves on the home shelf: the frame clock redraws what drew it lately (tick).
-    if (!isAway && (tab === 'home' || isEgg)) svgSeenAt = at
+    // The pixling moves on the home shelf: the frame clock repaints a terminal's Raster in place
+    // (paintRoom) and redraws what drew an SVG lately (tick).
+    const isMoving = !isAway && (tab === 'home' || isEgg)
+    if (e.surface === 'terminal') {
+      const raster = rasterOf(frame)
+      const key = isEgg ? ROOM_EGG_KEY : ROOM_SPRITE_KEY
+      roomSprite = isMoving ? { key, columns: raster.columns, rows: raster.rows, cells: raster.cells } : null
+    } else if (isMoving) svgSeenAt = at
     const model: RoomModel = {
       at,
       pixling,

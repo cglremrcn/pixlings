@@ -104,7 +104,12 @@ const host = (on: On, stored?: unknown, shared: Record<string, unknown> = {}) =>
     invalidated.count += 1
     return { value: undefined } as never
   })
-  on('ui.blit', () => ({ value: {} }) as never)
+  /** Every repaint in place, by where and what it named. */
+  const blits: { requestId: string; key: string }[] = []
+  on('ui.blit', ($, e) => {
+    blits.push({ requestId: e.requestId, key: e.key })
+    return { value: {} } as never
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   /** Every drawing the engine was asked for beneath the pixling, as it was asked. */
   const asked: { requestId: string; props: unknown }[] = []
@@ -125,7 +130,7 @@ const host = (on: On, stored?: unknown, shared: Record<string, unknown> = {}) =>
     versions[e.key] = version
     return { value: { isSet: true, version } } as never
   })
-  return { clock, db, ran, asked, shared, invalidated }
+  return { clock, db, ran, asked, shared, invalidated, blits }
 }
 
 const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, isInteractive = true): Promise<void> => {
@@ -268,6 +273,28 @@ describe('the room', () => {
     const resting = invalidated.count
     await clock.advance(3000)
     expect(invalidated.count - resting).toBe(0)
+    await ui.unmount()
+  })
+
+  // A redraw re-runs every hook of the plugin's, a heckled transcript's messages included: the
+  // terminal's Raster is repainted in place instead, as the band's is.
+  test('on the terminal the frame clock repaints the sprite in place, never redrawing the plugin', { timeoutMs: LONG }, async ($, on) => {
+    const { clock, invalidated, blits } = host(on, DUCK)
+    await start($)
+    const ui = await $.ui.mount(pane('terminal', 100))
+    await clock.advance(1000)
+    const shown = invalidated.count
+    const painted = blits.length
+    await clock.advance(5000)
+    expect(invalidated.count - shown).toBe(0)
+    const repaints = blits.slice(painted)
+    expect(repaints.length).toBeGreaterThan(0)
+    expect(repaints.every(b => b.requestId === ROOM_ID && b.key === 'room-pixling')).toBe(true)
+    await ui.press({ key: 'tab-badges' })
+    await clock.advance(1000)
+    const resting = blits.length
+    await clock.advance(3000)
+    expect(blits.length - resting).toBe(0)
     await ui.unmount()
   })
 

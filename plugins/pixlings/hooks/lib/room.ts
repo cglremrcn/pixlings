@@ -28,6 +28,10 @@ import { topTics } from './tics.ts'
 /** The pane's id: what `$.ui.open({ id })` opens and the render hook matches. */
 export const ROOM_ID = 'pixling-room'
 
+/** The keys of the room's big sprite: what the frame clock names to repaint it on the terminal. */
+export const ROOM_EGG_KEY = 'room-egg'
+export const ROOM_SPRITE_KEY = 'room-pixling'
+
 export type RoomTab = 'home' | 'garden' | 'badges'
 
 export const ROOM_TABS: readonly { readonly tab: RoomTab; readonly label: string; readonly short: string; readonly hotkey: string }[] = [
@@ -301,7 +305,7 @@ const egg = (kit: RoomKit, seat: Seat, m: RoomModel, p: Pixling | null): RenderE
     flexDirection: seat.isSideBySide ? 'row' : 'column',
     alignItems: seat.isSideBySide ? 'center' : 'flex-start',
     columnGap: 2,
-    children: [picture(kit, m.frame, seat.scale, 'room-egg', isHatching ? 'An egg, hatching' : 'An egg'), note],
+    children: [picture(kit, m.frame, seat.scale, ROOM_EGG_KEY, isHatching ? 'An egg, hatching' : 'An egg'), note],
   })
 }
 
@@ -328,7 +332,7 @@ const home = (kit: RoomKit, seat: Seat, m: RoomModel, p: Pixling, act: RoomActio
   const color = hex(RARITY_COLOR[s.rarity])
   const { level, into, need } = levelOf(p.xp)
   const cardWidth = seat.isSideBySide ? seat.columns - seat.spriteColumns - 2 : seat.columns
-  const sprite = picture(kit, m.frame, seat.scale, 'room-pixling', `${p.name} the ${s.name}`)
+  const sprite = picture(kit, m.frame, seat.scale, ROOM_SPRITE_KEY, `${p.name} the ${s.name}`)
   const card = Box({
     flexDirection: 'column',
     flexShrink: 1,

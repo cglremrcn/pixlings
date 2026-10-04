@@ -137,8 +137,9 @@ export const windowsSpeech = (): string[] => [
 /** The first Linux speaker found by `command -v`, as an argv builder taking the text. */
 export const linuxSpeaker = (found: string): ((text: string) => string[]) | null => {
   const bin = found.trim().split('\n')[0]?.trim() ?? ''
-  if (bin.endsWith('spd-say')) return text => [bin, '--wait', text]
-  if (bin.endsWith('espeak-ng') || bin.endsWith('espeak')) return text => [bin, text]
+  // `--` ends the options: a line that starts with "-" (a quip can) is said, never obeyed.
+  if (bin.endsWith('spd-say')) return text => [bin, '--wait', '--', text]
+  if (bin.endsWith('espeak-ng') || bin.endsWith('espeak')) return text => [bin, '--', text]
   return null
 }
 
