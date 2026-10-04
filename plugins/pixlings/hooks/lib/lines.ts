@@ -43,6 +43,11 @@ export type LineKey =
   | 'cacheCold'
   | 'cacheLearned'
   | 'share'
+  // The buddy bridge and its commands
+
+  // Reactions: compaction, plan mode, the squad, model switches
+
+  // The room and the transcript
 
 const LINES: Record<LineKey, readonly string[]> = {
   hatch: [
@@ -153,6 +158,12 @@ const LINES: Record<LineKey, readonly string[]> = {
   ],
   cacheLearned: ['Noted: your cache lives {item}.', 'Your prompt cache lasts {item}. Countdown fixed.'],
   share: ['Saved my card! Show me off.', 'Card printed. I look great.', 'Trading card ready. Post me!'],
+
+  // The buddy bridge and its commands
+
+  // Reactions: compaction, plan mode, the squad, model switches
+
+  // The room and the transcript
 }
 
 /** A species' own lines, mixed in with the shared ones. */
