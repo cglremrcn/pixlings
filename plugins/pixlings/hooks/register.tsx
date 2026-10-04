@@ -2,9 +2,12 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, PromptOrigin, Register, Timer } from 'claude-code'
 
 import type { PixlingsBubble, PixlingsCache, PixlingsNap, PixlingsVital, PixlingsView } from '../types'
+import type { PixlingsPersona } from '../types'
 import { award, BADGES, countDay, earnedBadges, localDate, recapLine, touchDay } from './lib/badges.ts'
 import { baseMood, holdFor, moodNow, PRIORITY, react, speak } from './lib/brain.ts'
 import type { Bubble, Held } from './lib/brain.ts'
+import { adopt, companionOf, configPath, readFileArgv, speciesNamed } from './lib/buddy.ts'
+import type { Companion } from './lib/buddy.ts'
 import { CARD_BG, CARD_SCALE, renderCard, shareText } from './lib/card.ts'
 import { CANVAS_W, HATCH_MS, renderFrame, renderHatch, renderSilhouette, samePixels, SPRITE_X } from './lib/canvas.ts'
 import type { Face, Hat, Icon, Mood, Pixels } from './lib/canvas.ts'
@@ -27,6 +30,8 @@ import {
 } from './lib/platform.ts'
 import type { Platform, Player } from './lib/platform.ts'
 import { encodePng } from './lib/png.ts'
+import { mayQuip, quipOf, quipRequest, tokensOf } from './lib/quips.ts'
+import type { QuipFacts, QuipKind, QuipReply, QuipRequest } from './lib/quips.ts'
 import {
   bump,
   daysTogether,
@@ -141,6 +146,8 @@ type Reaction = {
   slots?: Slots
   /** A line said as written, in place of one picked for `line`. */
   text?: string
+  /** Shown after the line in the bubble but not said aloud: a quip's token cost. */
+  suffix?: string
   sound?: string
   /** Plays under the "important" sound setting too, and wins over a held mood. */
   isImportant?: boolean
@@ -324,7 +331,7 @@ export const register: Register = (on, options) => {
   }
 
   const toast = (text: string, timeoutMs: number): void => {
-    if (io && !isQuiet) io.toast(text, timeoutMs)
+    if (io && !isQuiet && !isAway) io.toast(text, timeoutMs)
   }
 
   const publishView = async (): Promise<void> => {
@@ -341,13 +348,14 @@ export const register: Register = (on, options) => {
       hat,
       face,
     })
+    await publishPersona()
   }
 
   // Sound and notifications ---------------------------------------------------------------
 
   const play = (id: string, isImportant = false): void => {
     const port = io
-    if (!port || isQuiet || soundMode === 'off' || (soundMode === 'important' && !isImportant)) return
+    if (!port || isQuiet || isAway || soundMode === 'off' || (soundMode === 'important' && !isImportant)) return
     lastSoundAt = now()
     const asset = `sounds/${id}.wav`
     port.after(0, () => {
@@ -364,7 +372,7 @@ export const register: Register = (on, options) => {
 
   const notify = (body: string): void => {
     const port = io
-    if (!port || isQuiet || !wantsNotifications || !pixling) return
+    if (!port || isQuiet || isAway || !wantsNotifications || !pixling) return
     const argv = notificationArgv(platform, `${pixling.name} · Claude Code`, body)
     if (!argv) return
     port.after(0, () => {
@@ -418,7 +426,7 @@ export const register: Register = (on, options) => {
   }
 
   const voice = (text: string, priority: number, hasSound: boolean, isImportant: boolean): void => {
-    if (voiceMode === 'off' || isQuiet) return
+    if (voiceMode === 'off' || isQuiet || isAway) return
     if (voiceMode === 'speech') {
       // Under the "important" sound setting only what matters is read aloud.
       if (soundMode === 'important' && !isImportant) return
@@ -462,12 +470,13 @@ export const register: Register = (on, options) => {
     }
     if ((r.line || r.text) && (chatter !== 'quiet' || r.priority >= PRIORITY.testFail)) {
       const text = r.text ?? (r.line ? say(r.line, { name: pixling.name, ...r.slots }, pixling.species, Math.random) : '')
-      const spoken = speak(bubble, text, r.priority, holdFor(text), at)
+      const shown = r.suffix ? `${text}${r.suffix}` : text
+      const spoken = speak(bubble, shown, r.priority, holdFor(shown), at)
       if (spoken) {
         bubble = spoken
         bubbleId += 1
         const id = bubbleId
-        await port.setBubble({ text, id })
+        await port.setBubble({ text: shown, id })
         voice(text, r.priority, r.sound !== undefined, r.isImportant === true)
         port.after(spoken.until - at, () => {
           if (bubbleId === id) {
@@ -790,7 +799,7 @@ export const register: Register = (on, options) => {
     }
     const wakeAt = resetsAt !== null ? resetsAt + NAP_GRACE_MS : at + NAP_RETRY_MS * Math.min(4, 1 + napRetries)
     // A reset days off (a weekly limit) is announced when it comes; the conversation is stale by then.
-    const isAuto = wantsAutoContinue && !isQuiet && (resetsAt === null || resetsAt - at <= NAP_MAX_AGE_MS)
+    const isAuto = wantsAutoContinue && !isQuiet && !isAway && (resetsAt === null || resetsAt - at <= NAP_MAX_AGE_MS)
     nap = { until: resetsAt, isAuto, kind }
     napSince = at
     napSession = await port.sessionId()
@@ -903,6 +912,7 @@ export const register: Register = (on, options) => {
         slots: { failed: outcome.failed },
         sound: 'fail',
       })
+      maybeQuip('testFail', { failed: outcome.failed })
     } else if (lastTest === 'fail') {
       count('bugsSquashed')
       tally('squashed')
@@ -1059,9 +1069,25 @@ export const register: Register = (on, options) => {
     await $.store.set(SEEN_KEY, now())
     await $.command.register({
       name: 'pixling',
-      description: 'Your pixling: card, pet, name, wear, dex, hatch',
-      argumentHint: '[pet | name <name> | wear <item> | dex | hatch | help]',
+      description: 'Your pixling: card, pet, name, wear, dex, hatch, adopt your old /buddy, room, off/on',
+      argumentHint: '[pet | name <name> | wear <item> | dex | hatch | adopt [species] | room | off | on | help]',
     })
+    // The old /buddy's name; a session where the engine refuses it still has /pixling.
+    await $.command
+      .register({ name: 'buddy', description: 'Your pixling, under the old /buddy name: card, pet, off, on', argumentHint: '[pet | off | on]' })
+      .catch(() => undefined)
+    buddyIo = {
+      setPersona: async value => {
+        await update($, personaAtom, () => value)
+      },
+      setAway: async value => {
+        await update($, awayAtom, () => value)
+      },
+      complete: async request => $.model.complete(request),
+    }
+    // Sent away in an earlier session: it stays away until /pixling on.
+    isAway = (await $.store.get(AWAY_KEY)) === true
+    await buddyIo.setAway(isAway)
     if (!isQuiet) {
       $.clock.every(FRAME_MS, () => {
         void tick()
@@ -1128,6 +1154,7 @@ export const register: Register = (on, options) => {
         saidLateNight = night
         await express({ mood: 'sleep', priority: PRIORITY.ambient, holdMs: 2500, line: 'lateNight', slots: { time: clockTime(now()) } })
       }
+      if (isNamedIn(e.text)) maybeQuip('named')
     }
     return next(e)
   })
@@ -1283,6 +1310,195 @@ export const register: Register = (on, options) => {
 
   // Commands ------------------------------------------------------------------------------
 
+  // The buddy bridge, the away switch and the quips.
+
+  /** The engine calls these need, bound in `session.start` beside the command registrations. */
+  type BuddyIo = {
+    setPersona: (value: PixlingsPersona) => Promise<void>
+    setAway: (value: boolean) => Promise<void>
+    complete: (request: QuipRequest) => Promise<QuipReply>
+  }
+
+  /**
+   * What `/pixling adopt` asks of the engine, bound by the command's own hook (its `$` is the
+   * person's command, which the dialog answers to). Each variable is read by name.
+   */
+  type AdoptIo = {
+    read: (path: string) => Promise<string>
+    run: (argv: string[], env: Record<string, string>) => Promise<{ exitCode: number; stdout: string; isStdoutTruncated: boolean }>
+    ask: (question: string, labels: readonly string[]) => Promise<string>
+    os: () => Promise<string | undefined>
+    home: () => Promise<string | undefined>
+    userProfile: () => Promise<string | undefined>
+    configDir: () => Promise<string | undefined>
+    redraw: () => void
+  }
+
+  /** What `/pixling off` and `on` ask of the engine: the kept choice, and a redraw of the band. */
+  type AwayIo = { save: (away: boolean) => Promise<void>; redraw: () => void }
+
+  const personaAtom = atom({ plugin: 'pixlings', key: 'persona' } as const, null as PixlingsPersona)
+  const awayAtom = atom({ plugin: 'pixlings', key: 'isAway' } as const, false)
+  const AWAY_KEY = 'away'
+  const ROOM_ID = 'pixling-room'
+  const quipMode = String(options['quips'] ?? 'off')
+  const QUIP_PRIORITY: Readonly<Record<QuipKind, number>> = {
+    testFail: PRIORITY.testFail,
+    named: PRIORITY.pet,
+    error: PRIORITY.error,
+    bigDiff: PRIORITY.commit,
+  }
+
+  let buddyIo: BuddyIo | null = null
+  /** Sent away with `/pixling off`: no band, sound, voice, toast, notification or auto-continue. */
+  let isAway = false
+  let shownPersona: PixlingsPersona | undefined
+  let lastQuipAt: number | null = null
+  let isQuipping = false
+
+  const publishPersona = async (): Promise<void> => {
+    const value = pixling?.persona ?? null
+    if (!buddyIo || value === shownPersona) return
+    shownPersona = value
+    await buddyIo.setPersona(value)
+  }
+
+  /** The pixling's name said as a word, spelled as it is (names are capitalized; "cache" is not "Cache"). */
+  const isNamedIn = (text: string): boolean => {
+    const name = pixling?.name.trim() ?? ''
+    if (!name) return false
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}($|[^\\p{L}\\p{N}_])`, 'u').test(text)
+  }
+
+  /**
+   * With quips on, asks Haiku for a line about what happened and shows it with its cost; any
+   * failure leaves the canned line already said. At most one a minute, none while quiet or away.
+   * Facts are counts only. Other events call it too: `maybeQuip('error')`,
+   * `maybeQuip('bigDiff', { lines, files })`.
+   */
+  const maybeQuip = (kind: QuipKind, facts: QuipFacts = {}): void => {
+    const port = io
+    const engine = buddyIo
+    const p = pixling
+    if (!port || !engine || !p) return
+    // Quiet chatter hides lines below a failure's: no tokens for a line nobody would see.
+    if (chatter === 'quiet' && QUIP_PRIORITY[kind] < PRIORITY.testFail) return
+    const at = now()
+    if (!mayQuip({ mode: quipMode, isQuiet, isAway, isBusy: isQuipping, lastAt: lastQuipAt, now: at })) return
+    lastQuipAt = at
+    isQuipping = true
+    const request = quipRequest({ name: p.name, species: species().name, persona: p.persona }, kind, facts)
+    port.after(0, () => {
+      void (async () => {
+        try {
+          const reply = await engine.complete(request)
+          const spent = tokensOf(reply.usage)
+          const quip = quipOf(reply)
+          if (!pixling) return
+          if (spent > 0) pixling = bump(pixling, 'quipTokens', spent)
+          if (quip) pixling = bump(pixling, 'quips')
+          persist()
+          if (quip && !isAway) await express({ priority: QUIP_PRIORITY[kind], text: quip.text, suffix: ` · ${quip.tokens} tok` })
+        } catch {
+          // No quip this time: the canned line stands.
+        } finally {
+          isQuipping = false
+        }
+      })()
+    })
+  }
+
+  /** Reads the old /buddy's companion: the engine's read, else the host's own reader. */
+  const readCompanion = async (port: AdoptIo, path: string, isWindows: boolean): Promise<Companion | null> => {
+    try {
+      return companionOf(await port.read(path))
+    } catch {
+      // Refused or missing: the host process reads it instead.
+    }
+    try {
+      const { argv, env } = readFileArgv(isWindows ? 'windows' : 'linux', path)
+      const ran = await port.run(argv, env)
+      return ran.exitCode === 0 && !ran.isStdoutTruncated ? companionOf(ran.stdout) : null
+    } catch {
+      return null
+    }
+  }
+
+  const LOCAL_NOTE = 'The file was read locally; only the companion’s name, personality and hatch date were kept, and nothing was sent anywhere.'
+
+  const adoptBuddy = async (port: AdoptIo, arg: string): Promise<{ text: string }> => {
+    const was = pixling
+    if (!was) return { text: 'Your egg has not hatched yet.' }
+    const chosen = arg ? speciesNamed(arg) : null
+    if (arg && !chosen) {
+      return { text: `No species called "${arg}". Choose one of ${SPECIES.map(s => s.id).join(', ')}, or leave it out to keep ${was.name}'s body.` }
+    }
+    const isWindows = platform === 'windows' || (await port.os()) === 'Windows_NT'
+    const home = isWindows
+      ? (await port.userProfile()) || (await port.home())
+      : (await port.home()) || (await port.userProfile())
+    const configDir = await port.configDir()
+    if (!home && !configDir) return { text: 'Could not find your home folder to look for your old /buddy in.' }
+    const path = configPath(home ?? '', configDir, isWindows)
+    const found = await readCompanion(port, path, isWindows)
+    if (!found) {
+      return {
+        text: [
+          'No old /buddy companion to bring back.',
+          `I looked in ${path} for the "companion" entry Claude Code's /buddy kept there (its name, personality and hatch date), and found none.`,
+          `${was.name} is here, though. ♥`,
+          LOCAL_NOTE,
+        ].join('\n'),
+      }
+    }
+    const yes = `Bring ${found.name} back`
+    const no = `Keep ${was.name} as is`
+    const body = chosen ? ` and becomes a ${chosen.name}` : ''
+    let answer = no
+    try {
+      answer = await port.ask(
+        `${was.name} takes the name and personality of your old /buddy${body}; its level, stats, badges, streak, tics and dex are kept. Adopt ${found.name}?`,
+        [yes, no],
+      )
+    } catch {
+      return { text: 'Nothing changed.' }
+    }
+    // Only the exact label is a yes: anything typed under "Other" leaves everything as it was.
+    if (answer !== yes) return { text: `Nothing changed. ${was.name} stays as is.` }
+    const before = pixling ?? was
+    pixling = adopt(before, found, chosen ?? undefined)
+    persist()
+    await publishView()
+    if (pixling.species !== before.species) port.redraw()
+    await express({ mood: 'celebrate', priority: PRIORITY.celebrate, holdMs: 3500, line: 'buddyBack', slots: { name: found.name }, sound: 'levelup' })
+    const days = found.hatchedAt !== null ? ` ${daysTogether(pixling, now())} day(s) together, counted from when ${found.name} hatched.` : ''
+    return {
+      text: [`${found.name} is back!${days}`, `Personality: ${pixling.persona}`, `Read from ${path}.`, LOCAL_NOTE].join('\n'),
+    }
+  }
+
+  /** `/pixling off` and `on`: the choice is kept for later sessions; stats and XP count either way. */
+  const switchAway = async (port: AwayIo, away: boolean): Promise<{ text: string }> => {
+    const p = pixling
+    if (!p) return { text: 'Your egg has not hatched yet.' }
+    if (away === isAway) return { text: away ? `${p.name} is already away. /pixling on brings it back.` : `${p.name} is right here. ♥` }
+    isAway = away
+    if (away && nap?.isAuto) {
+      // Away means nobody to wake Claude for: the nap goes on without the auto-continue.
+      nap = { ...nap, isAuto: false }
+      await io?.setNap(nap)
+    }
+    await port.save(away)
+    await buddyIo?.setAway(away)
+    port.redraw()
+    if (away) {
+      return { text: `${p.name} is away: no band, sound, voice, toasts, notifications or auto-continue. Stats and XP still count. /pixling on brings it back.` }
+    }
+    await express({ mood: 'happy', priority: PRIORITY.celebrate, holdMs: 3000, line: 'backFromAway', sound: 'wake' })
+    return { text: `${p.name} is back.` }
+  }
+
   const WEARABLES = UNLOCKS.map(u => u.hat ?? u.face).join('|')
   const HELP = [
     "/pixling — your pixling's card",
@@ -1293,7 +1509,19 @@ export const register: Register = (on, options) => {
     `/pixling wear <${WEARABLES}|none> — change its look`,
     '/pixling dex — the species you have hatched',
     '/pixling hatch — release it and hatch a new egg (level and stats reset; badges, streak and dex stay)',
-    'Sound, voice, the band, vitals, the cache warning and auto-continue are in /config.',
+    '/pixling adopt [species] — bring back your old /buddy: its name, personality and days together (read locally)',
+    '/pixling room — open its room',
+    '/pixling off — send it away: no band, sound, voice, toasts or auto-continue (stats still count)',
+    '/pixling on — bring it back',
+    '/buddy, /buddy pet, /buddy off, /buddy on — the same, under the old name',
+    'Sound, voice, AI quips, the band, vitals, the cache warning and auto-continue are in /config.',
+  ].join('\n')
+  const BUDDY_HELP = [
+    '/buddy — the card',
+    '/buddy pet — pet it',
+    '/buddy off — send it away',
+    '/buddy on — bring it back',
+    'Everything else is under /pixling help; /pixling adopt brings back your old /buddy.',
   ].join('\n')
 
   const slug = (name: string): string =>
@@ -1309,6 +1537,29 @@ export const register: Register = (on, options) => {
     return `${isEarned ? b.emoji : '🔒'} ${b.name.padEnd(19)} ${state.padEnd(18)} ${b.how}`
   }
 
+  /** The text card: who it is, its personality, whose Buddy it was, what its quips cost. */
+  const cardText = (p: Pixling): string => {
+    const met = p.adoptedFrom ? [`Adopted from your old /buddy: ${daysTogether(p, now())} day(s) together.`] : []
+    const quips = p.stats.quips > 0 || quipMode === 'haiku' ? [`AI quips: ${p.stats.quips}, ${p.stats.quipTokens} tok in all.`] : []
+    const away = isAway ? [`${p.name} is away. /pixling on brings it back.`] : []
+    return [
+      `${p.name} the ${species().name}, level ${levelOf(p.xp).level}. /pixling share saves its card.`,
+      `Personality: ${p.persona}`,
+      ...met,
+      ...quips,
+      ...away,
+    ].join('\n')
+  }
+
+  const pet = async (): Promise<{ text: string }> => {
+    if (!pixling) return { text: 'Your egg has not hatched yet.' }
+    petsToday += 1
+    count('pets')
+    await express({ mood: 'love', priority: PRIORITY.pet, holdMs: 2600, line: 'pet', sound: 'pet' })
+    if (petsToday <= 20) await grant('pet')
+    return { text: `You pet ${pixling.name}. ♥` }
+  }
+
   on('command.run', { command: 'pixling' }, async ($, e) => {
     if (!pixling) return { text: 'Your egg has not hatched yet.' }
     const [sub = '', ...rest] = e.args.trim().split(/\s+/)
@@ -1316,7 +1567,36 @@ export const register: Register = (on, options) => {
     switch (sub.toLowerCase()) {
       case '':
       case 'card':
-        return { text: `${pixling.name} the ${species().name}, level ${levelOf(pixling.xp).level}. /pixling share saves its card.` }
+        return { text: cardText(pixling) }
+      case 'adopt':
+        return adoptBuddy(
+          {
+            read: path => $.fs.read(path),
+            run: (argv, env) => $.process.run(argv, { env, timeoutMs: 15_000 }),
+            ask: (question, labels) => $.ui.ask(question, labels),
+            os: () => $.env.get('OS'),
+            home: () => $.env.get('HOME'),
+            userProfile: () => $.env.get('USERPROFILE'),
+            configDir: () => $.env.get('CLAUDE_CONFIG_DIR'),
+            redraw: () => $.ui.invalidate('ui.render'),
+          },
+          arg,
+        )
+      case 'off':
+      case 'on':
+        return switchAway(
+          { save: away => $.store.set(AWAY_KEY, away), redraw: () => $.ui.invalidate('ui.render') },
+          sub.toLowerCase() === 'off',
+        )
+      case 'room': {
+        const title = `${pixling.name}'s room`
+        try {
+          const opened = await $.ui.open({ id: ROOM_ID, title })
+          return { text: opened.isPlaced ? `${title} is open.` : `${title} opens once there is space for it: ${opened.reason}` }
+        } catch {
+          return { text: `${title} could not open here.` }
+        }
+      }
       case 'badges': {
         const p = pixling
         return { text: [`Badges ${earnedBadges(p).length}/${BADGES.length}`, ...BADGES.map(b => badgeLine(b, p))].join('\n') }
@@ -1351,13 +1631,8 @@ export const register: Register = (on, options) => {
           ].join('\n'),
         }
       }
-      case 'pet': {
-        petsToday += 1
-        count('pets')
-        await express({ mood: 'love', priority: PRIORITY.pet, holdMs: 2600, line: 'pet', sound: 'pet' })
-        if (petsToday <= 20) await grant('pet')
-        return { text: `You pet ${pixling.name}. ♥` }
-      }
+      case 'pet':
+        return pet()
       case 'name': {
         const name = arg.replace(/[^\p{L}\p{N} _'-]/gu, '').slice(0, 20).trim()
         if (!name) return { text: 'Usage: /pixling name <new name>' }
@@ -1413,6 +1688,24 @@ export const register: Register = (on, options) => {
       }
       default:
         return { text: HELP }
+    }
+  })
+
+  // The old /buddy's own words lead to the same places.
+  on('command.run', { command: 'buddy' }, async ($, e) => {
+    if (!pixling) return { text: 'Your egg has not hatched yet.' }
+    const sub = e.args.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
+    switch (sub) {
+      case '':
+      case 'card':
+        return { text: cardText(pixling) }
+      case 'pet':
+        return pet()
+      case 'off':
+      case 'on':
+        return switchAway({ save: away => $.store.set(AWAY_KEY, away), redraw: () => $.ui.invalidate('ui.render') }, sub === 'off')
+      default:
+        return { text: BUDDY_HELP }
     }
   })
 

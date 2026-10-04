@@ -44,6 +44,8 @@ export type LineKey =
   | 'cacheLearned'
   | 'share'
   // The buddy bridge and its commands
+  | 'buddyBack'
+  | 'backFromAway'
 
   // Reactions: compaction, plan mode, the squad, model switches
 
@@ -160,6 +162,8 @@ const LINES: Record<LineKey, readonly string[]> = {
   share: ['Saved my card! Show me off.', 'Card printed. I look great.', 'Trading card ready. Post me!'],
 
   // The buddy bridge and its commands
+  buddyBack: ['{name} is back!', '{name} is back! Did you miss me?', "{name} is back! Where were we?"],
+  backFromAway: ["I'm back! What did I miss?", 'Back on duty!', 'Missed me? I counted your commits.'],
 
   // Reactions: compaction, plan mode, the squad, model switches
 
