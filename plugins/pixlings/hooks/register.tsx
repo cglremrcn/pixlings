@@ -136,6 +136,10 @@ const TONE_COLOR: Readonly<Record<PixlingsVital['tone'], string | undefined>> = 
   dim: undefined,
 }
 
+/** The hover card's fill and ink: its own pair, readable whatever the terminal's colors are. */
+const CARD_FILL = '#1a1b26'
+const CARD_INK = '#c0caf5'
+
 const isTtl = (value: unknown): value is Ttl => value === '5m' || value === '1h'
 
 const hex = (color: number): string => `#${color.toString(16).padStart(6, '0')}`
@@ -1847,6 +1851,7 @@ export const register: Register = (on, options) => {
             ))}
           </Box>
         ) : null}
+        {/* Opaque, with its own ink, so the rows it covers never show through, on a dark terminal or a light one. */}
         <Box
           position="absolute"
           bottom={0}
@@ -1857,10 +1862,13 @@ export const register: Register = (on, options) => {
           flexDirection="column"
           borderStyle="round"
           borderColor={color}
+          backgroundColor={CARD_FILL}
           paddingX={1}
         >
           {card.map(line => (
-            <Text wrap="truncate-end">{line}</Text>
+            <Text color={CARD_INK} wrap="truncate-end">
+              {line}
+            </Text>
           ))}
         </Box>
       </Box>

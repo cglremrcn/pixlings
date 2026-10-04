@@ -111,9 +111,19 @@ const host = (on: On, stored?: unknown, shared: Record<string, unknown> = {}) =>
     asked.push({ requestId: e.requestId, props: e.props })
     return ENGINE as never
   })
+  // A shared key stays what the test pins, but the pixling's own writes to it land (and are passed
+  // over), so a compare-and-set writer such as `update` never spins on it.
+  const versions: Record<string, number> = {}
+  const isPinned = (e: { plugin: string; key: string }): boolean => e.plugin === 'pixlings' && Object.hasOwn(shared, e.key)
   on('state.get', ($, e, next) =>
-    e.plugin === 'pixlings' && Object.hasOwn(shared, e.key) ? ({ value: { value: shared[e.key], version: 1 } } as never) : next(e),
+    isPinned(e) ? ({ value: { value: shared[e.key], version: versions[e.key] ?? 1 } } as never) : next(e),
   )
+  on('state.set', ($, e, next) => {
+    if (!isPinned(e)) return next(e)
+    const version = (versions[e.key] ?? 1) + 1
+    versions[e.key] = version
+    return { value: { isSet: true, version } } as never
+  })
   return { clock, db, ran, asked, shared, invalidated }
 }
 
@@ -345,6 +355,8 @@ describe('the band', () => {
       const card = hoverReveal(tree)
       expect(card, surface).toBeDefined()
       expect(card?.props?.['position'], surface).toBe('absolute')
+      // Laid over the info rows, it is filled so none of them show through its blank cells.
+      expect(card?.props?.['backgroundColor'], surface).toBeDefined()
       const text = textOf(card)
       expect(text).toContain('A rubber duck who listens')
       expect(text).toContain('🔥 4-day streak (best 6) · 33 days together')
@@ -391,6 +403,25 @@ describe('the band', () => {
       }
     })
   }
+
+  test('/pixling off hides the band and the room, /pixling on brings them back', { timeoutMs: LONG }, async ($, on) => {
+    const { clock, db } = host(on, DUCK)
+    await start($)
+    await clock.advance(3000)
+    const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await band.find({ type: 'Text', text: 'Quackers' })).toBeDefined()
+    await $.command.run({ command: 'pixling', args: 'off' } as never)
+    expect(db.get('away')).toBe(true)
+    await band.redraw()
+    expect(await band.drawn()).toEqual(ENGINE)
+    const room = await $.ui.mount(pane('terminal', 60))
+    expect(await room.find({ type: 'Text', text: '💤 Quackers is away.' })).toBeDefined()
+    await room.unmount()
+    await $.command.run({ command: 'pixling', args: 'on' } as never)
+    await band.redraw()
+    expect(await band.find({ type: 'Text', text: 'Quackers' })).toBeDefined()
+    await band.unmount()
+  })
 })
 
 describe('the card', () => {
@@ -436,6 +467,10 @@ describe('the card', () => {
     const { clock } = host(on, DUCK, { isAway: true })
     await start($)
     await clock.advance(3000)
+    // Hatched and loaded, so the engine's own card below is the away rule's doing.
+    const home = await $.ui.mount(pane('terminal', 60))
+    expect(await home.find({ type: 'Text', text: '💤 Quackers is away.' })).toBeDefined()
+    await home.unmount()
     for (const surface of SURFACES) {
       for (const command of ['pixling', 'buddy']) {
         const ui = await $.ui.mount({ ...card(command, ''), surface })
