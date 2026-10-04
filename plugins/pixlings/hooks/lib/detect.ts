@@ -742,6 +742,18 @@ export const clockTime = (at: number): string => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+/** Lines a file edit writes: a Write's whole content, an Edit's new text, a MultiEdit's edits. */
+export const linesWritten = (tool: string, input: Record<string, unknown>): number => {
+  const count = (text: unknown): number =>
+    typeof text === 'string' && text !== '' ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0
+  if (tool === 'Write') return count(input['content'])
+  if (tool === 'Edit') return count(input['new_string'])
+  if (tool === 'MultiEdit' && Array.isArray(input['edits'])) {
+    return input['edits'].reduce((n: number, edit: unknown) => n + count((edit as Record<string, unknown> | null)?.['new_string']), 0)
+  }
+  return 0
+}
+
 /** File name of a tool's target, for lines like "reading auth.ts". */
 export const fileOf = (input: Record<string, unknown>): string | null => {
   const path = input['file_path'] ?? input['path'] ?? input['notebook_path']

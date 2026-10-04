@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { commandsOf, isTestCommand, riskOf, runsGitCommit, testOutcome } from '../hooks/lib/detect.ts'
+import { commandsOf, isTestCommand, linesWritten, riskOf, runsGitCommit, testOutcome } from '../hooks/lib/detect.ts'
 import { ticsIn } from '../hooks/lib/tics.ts'
 
 const labelOf = (command: string): string | null => riskOf(command)?.label ?? null
@@ -279,5 +279,16 @@ describe('tics', () => {
     expect(ticsIn('Done. Excellent point, I will change it.')).toEqual({ greatQuestion: 1 })
     expect(ticsIn('The good catches are logged; a great point of failure is the cache.')).toEqual({})
     expect(ticsIn('```\nApologies for the confusion.\n```\n`Great question!`')).toEqual({})
+  })
+})
+
+describe('edits', () => {
+  test('the lines an edit writes: a Write whole, an Edit its new text, a MultiEdit its edits', () => {
+    expect(linesWritten('Write', { file_path: 'a.ts', content: 'a\nb\nc\n' })).toBe(3)
+    expect(linesWritten('Write', { file_path: 'a.ts', content: 'a\nb' })).toBe(2)
+    expect(linesWritten('Edit', { file_path: 'a.ts', old_string: 'x\ny\nz', new_string: 'x' })).toBe(1)
+    expect(linesWritten('MultiEdit', { file_path: 'a.ts', edits: [{ new_string: 'a\nb' }, { new_string: 'c' }, null] })).toBe(3)
+    expect(linesWritten('Read', { file_path: 'a.ts' })).toBe(0)
+    expect(linesWritten('Write', { file_path: 'a.ts', content: '' })).toBe(0)
   })
 })

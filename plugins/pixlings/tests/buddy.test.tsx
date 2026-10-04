@@ -643,6 +643,28 @@ describe('quips in a session', () => {
     expect(card.text).toContain('AI quips: 2, 184 tok')
   })
 
+  test('a big edit and an API error ask too, in counts only; a small edit does not', { options: { quips: 'haiku' }, plugins: [PEEK] }, async ($, on) => {
+    const { clock, models } = host(on, { stored: DUCK, reply: answered })
+    on('tool.call', () => ({ result: {}, text: 'ok' }) as never)
+    await $.session.start(START)
+    await clock.advance(10_000)
+    await $.tool.call({ tool: 'Write', tool_use_id: 'w0', file_path: '/repo/src/secret.ts', content: 'tiny\n'.repeat(20) } as never)
+    await clock.advance(50)
+    expect(models.length).toBe(0)
+    await $.tool.call({ tool: 'Write', tool_use_id: 'w1', file_path: '/repo/src/secret.ts', content: 'const x = 1\n'.repeat(180) } as never)
+    await clock.advance(50)
+    expect(models.length).toBe(1)
+    expect(models[0]?.prompt).toContain('Claude just changed 180 lines across 1 file')
+    expect(models[0]?.prompt).not.toContain('secret')
+    expect(models[0]?.prompt).not.toContain('const x')
+    // Past the minute: the pixling reads the test clock every ten frames, so a hair over it.
+    await clock.advance(MIN + 1000)
+    await $.turn.complete({ answer: '', durationMs: 3000, isAborted: false, turnId: 't', reason: 'error' } as never)
+    await clock.advance(50)
+    expect(models.length).toBe(2)
+    expect(models[1]?.prompt).toContain('Claude just ran into an error')
+  })
+
   test('saying its name sends only that it was said', { options: { quips: 'haiku' }, plugins: [PEEK] }, async ($, on) => {
     const { clock, models } = host(on, { stored: DUCK, reply: answered })
     await $.session.start(START)

@@ -476,6 +476,29 @@ describe('the day', () => {
   })
 })
 
+describe('one line, two things', () => {
+  test('a line that commits and then fails its tests counts the commit and the red run', async ($, on) => {
+    const { clock, db } = host(on, DUCK)
+    usage(on, [])
+    const out = '[main 1a2b3c4] Add x\n==== 2 failed, 10 passed in 0.5s ===='
+    on('tool.call', () => ({
+      isError: true,
+      result: { stdout: out, stderr: '', interrupted: false, gitOperation: { commit: { sha: '1a2b3c4' } } },
+      text: out,
+    }) as never)
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+    await clock.advance(10_000)
+    const stored = db.get('pixling') as { stats: { commits?: number; testsFailed?: number } }
+    const commits = stored.stats.commits ?? 0
+    const red = stored.stats.testsFailed ?? 0
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'c1', command: 'git commit -am "Add x" && npm test' } as never)
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: {} } as never)
+    const after = db.get('pixling') as { stats: { commits?: number; testsFailed?: number } }
+    expect(after.stats.commits).toBe(commits + 1)
+    expect(after.stats.testsFailed).toBe(red + 1)
+  })
+})
+
 describe('sound and speech', () => {
   test('with sound on important, speech reads only the important lines', { options: { sound: 'important', voice: 'speech' } }, async ($, on) => {
     const { clock, ran } = host(on, DUCK)

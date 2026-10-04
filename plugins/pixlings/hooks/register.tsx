@@ -11,7 +11,7 @@ import type { Companion } from './lib/buddy.ts'
 import { CARD_BG, CARD_SCALE, renderCard, shareText } from './lib/card.ts'
 import { CANVAS_W, HATCH_MS, MINI_LEAVE_MS, MINI_POOF_MS, miniTint, renderFrame, renderHatch, renderSilhouette, samePixels, SPRITE_X, SQUAD_CAP, squadWidth } from './lib/canvas.ts'
 import type { Face, Hat, Icon, MiniView, Mood, Pixels } from './lib/canvas.ts'
-import { blockingWindow, clockTime, formatDuration, iconFor, isTestCommand, riskOf, runsGitCommit, testOutcome } from './lib/detect.ts'
+import { blockingWindow, clockTime, formatDuration, iconFor, isTestCommand, linesWritten, riskOf, runsGitCommit, testOutcome } from './lib/detect.ts'
 import type { LimitWindow, Risk } from './lib/detect.ts'
 import { say } from './lib/lines.ts'
 import type { LineKey, Slots } from './lib/lines.ts'
@@ -96,6 +96,8 @@ const RASTER_KEY = 'pixling'
 const FRAME_MS = 100
 const DOZE_AFTER_MS = 15 * 60_000
 const LONG_TURN_MS = 45_000
+// An edit this many lines long is worth a quip, when quips are on.
+const BIG_DIFF_LINES = 150
 const NAP_RETRY_MS = 20 * 60_000
 const NAP_GRACE_MS = 20_000
 /** Past this a nap's conversation is stale: the reset is announced, Claude is not continued. */
@@ -1446,7 +1448,13 @@ export const register: Register = (on, options) => {
       const output = ran.text ?? `${record.stdout ?? ''}\n${record.stderr ?? ''}`
       const isError = ran.isError === true
       if (isTestCommand(command)) await afterTests(output, isError)
-      else if (!isError) await afterGit(command, record.gitOperation)
+      // `git commit -am x && npm test` commits and then tests: both count. A red run fails the
+      // line, but the commit the engine saw still stands.
+      if (!isError || record.gitOperation?.commit) await afterGit(command, record.gitOperation)
+    }
+    if (ran.deny === undefined && ran.isError !== true) {
+      const lines = linesWritten(String(e.tool), input)
+      if (lines >= BIG_DIFF_LINES) maybeQuip('bigDiff', { lines, files: 1 })
     }
     return ran
   })
@@ -1510,6 +1518,7 @@ export const register: Register = (on, options) => {
           await fallAsleep()
         } else if (!nap && now() - lastLimitAt > 3000) {
           await express({ mood: 'dizzy', priority: PRIORITY.error, holdMs: 3000, line: 'error', sound: 'error' })
+          maybeQuip('error')
         }
         break
       }
