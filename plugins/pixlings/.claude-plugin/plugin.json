@@ -1,7 +1,7 @@
 {
   "name": "pixlings",
-  "version": "0.2.0",
-  "description": "Hatch a tiny pixel creature that lives above your Claude Code prompt. It reacts to tests, commits and risky commands, counts down your prompt cache, rolls its eyes at \"You're absolutely right\", earns badges, prints a shareable trading card, and naps through your rate limit, then wakes Claude when it resets.",
+  "version": "0.3.0",
+  "description": "A tiny pixel creature that lives above your Claude Code prompt. It counts down your prompt cache and guards it on model switches, wakes Claude when your usage limit resets, brings a helper for every subagent, makes sound on Windows and Linux, yelps before risky commands, rolls its eyes at \"You're absolutely right\", and brings back your old /buddy.",
   "author": {
     "name": "cglremrcn",
     "url": "https://github.com/cglremrcn"
@@ -19,7 +19,8 @@
     "notifications",
     "rate-limit",
     "prompt-cache",
-    "badges"
+    "badges",
+    "subagents"
   ],
   "types": "./types/index.d.ts",
   "userConfig": {

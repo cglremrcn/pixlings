@@ -12,15 +12,15 @@
     {
       "name": "pixlings",
       "source": "./plugins/pixlings",
-      "description": "Hatch a tiny pixel creature that lives above your Claude Code prompt. It counts down your prompt cache, wakes Claude when your usage limit resets, makes sound on Windows and Linux, alarms before risky commands, and rolls its eyes at \"You're absolutely right\".",
-      "version": "0.2.0",
+      "description": "A tiny pixel creature that lives above your Claude Code prompt. It counts down your prompt cache and guards it on model switches, wakes Claude when your usage limit resets, brings a helper for every subagent, makes sound on Windows and Linux, yelps before risky commands, rolls its eyes at \"You're absolutely right\", and brings back your old /buddy.",
+      "version": "0.3.0",
       "author": {
         "name": "cglremrcn",
         "url": "https://github.com/cglremrcn"
       },
       "homepage": "https://github.com/cglremrcn/pixlings",
       "category": "productivity",
-      "keywords": ["mod", "companion", "pet", "tamagotchi", "prompt-cache", "rate-limit", "sound", "notifications"]
+      "keywords": ["mod", "companion", "pet", "buddy", "tamagotchi", "prompt-cache", "rate-limit", "sound", "notifications", "subagents"]
     }
   ]
 }

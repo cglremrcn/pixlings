@@ -1861,7 +1861,7 @@ export const register: Register = (on, options) => {
     '/pixling off — send it away: no band, sound, voice, toasts or auto-continue (stats still count)',
     '/pixling on — bring it back',
     '/buddy, /buddy pet, /buddy off, /buddy on — the same, under the old name',
-    'Sound, voice, AI quips, the band, vitals, the cache warning and auto-continue are in /config.',
+    'Sound, voice, AI quips, the band, vitals, the cache warning and guard, the heckle and auto-continue are in /config.',
   ].join('\n')
   const BUDDY_HELP = [
     '/buddy — the card',
