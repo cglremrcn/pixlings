@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/hero.gif" width="100%" alt="A pixel duck above the Claude Code prompt. It rains on the duck when tests fail, confetti flies when they pass, it rolls its eyes at &quot;You're absolutely right&quot;, warns that the prompt cache expires in a minute, then wanders off.">
+  <img src="docs/media/hero.gif" width="100%" alt="A pixel duck above the Claude Code prompt. It rains on the duck when tests fail and confetti flies when they pass; two little helpers hop in beside it when Claude starts two subagents and jump for joy when they finish; it rolls its eyes at &quot;You're absolutely right&quot;, warns that the prompt cache expires in a minute, then wanders off.">
 </p>
 
 # Pixlings

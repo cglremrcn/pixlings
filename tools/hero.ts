@@ -6,8 +6,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { CANVAS_W, renderFrame, SPRITE_X, TRANSPARENT } from '../plugins/pixlings/hooks/lib/canvas.ts'
-import type { Icon, Mood } from '../plugins/pixlings/hooks/lib/canvas.ts'
+import { CANVAS_W, MINI_LEAVE_MS, miniTint, renderFrame, SPRITE_X, squadWidth, TRANSPARENT } from '../plugins/pixlings/hooks/lib/canvas.ts'
+import type { Icon, MiniView, Mood } from '../plugins/pixlings/hooks/lib/canvas.ts'
 import { roamRange, walk, newWalker, isWalking } from '../plugins/pixlings/hooks/lib/roam.ts'
 import { SPECIES } from '../plugins/pixlings/hooks/lib/sprites.ts'
 import { freshCache, observe, vitals } from '../plugins/pixlings/hooks/lib/vitals.ts'
@@ -26,7 +26,8 @@ type Beat = {
   walks?: boolean
 }
 
-// One session, in beats: tests fail, Claude fixes them, apologises, and the cache starts cooling.
+// One session, in beats: tests fail, Claude fixes them, sends two subagents, apologises, and the
+// cache starts cooling.
 const BEATS: Beat[] = [
   { from: 0, mood: 'working', bubble: null, icon: 'test', isWorking: true, transcript: ['● Bash(npm test)', '  ⎿  Running…'] },
   {
@@ -45,20 +46,35 @@ const BEATS: Beat[] = [
   },
   {
     from: 7000,
+    mood: 'working',
+    bubble: 'Backup has arrived!',
+    icon: 'agent',
+    isWorking: true,
+    transcript: ['● Explore(Find every caller of parse)', '● Plan(Split the parser in two)'],
+  },
+  {
+    from: 9300,
+    mood: 'happy',
+    bubble: '2 helpers, 2 high fives.',
+    isWorking: true,
+    transcript: ['● Explore(Find every caller of parse)', '● Plan(Split the parser in two)'],
+  },
+  {
+    from: 12_400,
     mood: 'unimpressed',
     bubble: '"You\'re absolutely right." That\'s 37 now.',
     isWorking: true,
     transcript: ["● You're absolutely right! The fixture was stale, not the parser."],
   },
   {
-    from: 9800,
+    from: 15_200,
     mood: 'attention',
     bubble: 'Psst: the prompt cache expires in 1m.',
     isWorking: false,
     transcript: ["● You're absolutely right! The fixture was stale, not the parser."],
   },
   {
-    from: 12_600,
+    from: 18_000,
     mood: 'idle',
     bubble: null,
     isWorking: false,
@@ -66,7 +82,23 @@ const BEATS: Beat[] = [
     transcript: ["● You're absolutely right! The fixture was stale, not the parser."],
   },
 ]
-const END = 16_000
+const END = 21_400
+
+/** The subagents: each one's mini hops in when it starts and celebrates when it is done. */
+const SQUAD = [
+  { type: 'Explore', join: 7000, done: 9000, icons: ['read', 'web'] as Icon[] },
+  { type: 'Plan', join: 7400, done: 9300, icons: ['read', 'bash'] as Icon[] },
+]
+
+/** The strip as the band draws it at `t` (hooks/register.tsx squadAt). */
+const squadAt = (t: number): MiniView[] =>
+  SQUAD.filter(a => t >= a.join && (t < a.done || t - a.done < MINI_LEAVE_MS)).map((a, i) => ({
+    tint: miniTint(a.type),
+    t: t - a.join,
+    doneT: t >= a.done ? t - a.done : null,
+    icon: t < a.done ? a.icons[Math.floor((t - a.join) / 1200) % a.icons.length] : null,
+    seed: i * 37,
+  }))
 
 const T0 = Date.parse('2026-10-03T12:00:00Z')
 const seeded = (seed: number) => () => {
@@ -79,13 +111,13 @@ const main = (): void => {
   mkdirSync(out, { recursive: true })
   const range = roamRange(COLUMNS)
   // The cache: a long conversation, mostly served from cache; its last request was sent so the
-  // countdown reads 1:00 when the turn ends at 9.8 s.
+  // countdown reads 1:00 when the turn ends at 15.2 s.
   let cache = freshCache('5m', true)
   cache = observe(cache, { input_tokens: 900, output_tokens: 600, cache_read_input_tokens: 0, cache_creation_input_tokens: 61_000 }, T0 - 600_000).cache
   for (let i = 0; i < 9; i++) {
     cache = observe(cache, { input_tokens: 700, output_tokens: 500, cache_read_input_tokens: 62_000 + i * 1500, cache_creation_input_tokens: 1500 }, T0 - 590_000 + i * 20_000).cache
   }
-  const lastSent = T0 + 9800 - 240_000
+  const lastSent = T0 + 15_200 - 240_000
   cache = observe(cache, { input_tokens: 600, output_tokens: 700, cache_read_input_tokens: 76_000, cache_creation_input_tokens: 1200 }, lastSent).cache
 
   let walker = newWalker(range, 0)
@@ -94,8 +126,11 @@ const main = (): void => {
   for (let t = 0, i = 0; t < END; t += FRAME_MS, i++) {
     const beat = [...BEATS].reverse().find(b => t >= b.from)!
     const since = t - beat.from
-    walker = walk(walker, range, beat.walks ? 'wander' : beat.isWorking ? 'home' : 'stay', t, random)
-    if (beat.walks && i === Math.round(12_700 / FRAME_MS)) walker = { ...walker, restUntil: t }
+    const squad = squadAt(t)
+    // Like the band, the walk gives up the columns the squad stands on.
+    const room = Math.max(0, range - squadWidth(squad.length))
+    walker = walk(walker, room, beat.walks ? 'wander' : beat.isWorking ? 'home' : 'stay', t, random)
+    if (beat.walks && i === Math.round(18_100 / FRAME_MS)) walker = { ...walker, restUntil: t }
     const isStepping = beat.walks === true && isWalking(walker)
     const frame = renderFrame({
       species: duck,
@@ -104,9 +139,10 @@ const main = (): void => {
       t: isStepping ? t : since,
       hat: 'sprout',
       icon: beat.icon,
-      width: CANVAS_W + range,
+      width: CANVAS_W + room,
       x: SPRITE_X + walker.x,
       isFlipped: isStepping && walker.isFlipped,
+      squad,
     })
     const bin = Buffer.alloc(8 + frame.w * frame.h * 4)
     bin.writeUInt32LE(frame.w, 0)

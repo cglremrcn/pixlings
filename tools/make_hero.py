@@ -136,7 +136,8 @@ def paint(scene: dict, frame: dict, frames_dir: Path, t: Type) -> Image.Image:
 
     x0, y0 = pad + t.cell_w, title_h + pad
     for i, line in enumerate(transcript[:2]):
-        t.draw(d, 0, 1 + i, line, FG if i == 0 else DIM, x0, y0)
+        # A tool call (●) reads bright; the result under it (⎿) dim.
+        t.draw(d, 0, 1 + i, line, FG if i == 0 or line.startswith("●") else DIM, x0, y0)
 
     band_top = 4
     # The canvas: two pixels per cell, painted as squares.
