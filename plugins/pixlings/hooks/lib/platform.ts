@@ -12,7 +12,7 @@ const psQuote = (s: string): string => `'${s.replace(/'/g, "''")}'`
 export const POWERSHELL = 'powershell.exe'
 
 // No `-ExecutionPolicy Bypass`: the policy governs script files, never `-Command`, and EDR tools flag it.
-const PS_FLAGS = ['-NoProfile', '-NonInteractive', '-Command'] as const
+export const PS_FLAGS = ['-NoProfile', '-NonInteractive', '-Command'] as const
 
 export const windowsPlayer = (path: string): string[] => [
   POWERSHELL,

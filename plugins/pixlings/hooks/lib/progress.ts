@@ -1,6 +1,7 @@
 // The pixling's life: hatching rolls, names, experience, levels and what each level unlocks.
 
 import type { Face, Hat } from './canvas.ts'
+import { oneLine, personaFor } from './persona.ts'
 import { RARITY_ORDER, RARITY_WEIGHT, SPECIES } from './sprites.ts'
 import type { Rarity, Species } from './sprites.ts'
 import type { TicCounts } from './tics.ts'
@@ -22,6 +23,9 @@ export type Stats = {
   nights: number
   /** Times the prompt cache went cold under a pause. */
   coldStarts: number
+  /** Opt-in Haiku quips said, and every token they were billed for. */
+  quips: number
+  quipTokens: number
 }
 
 /** Consecutive days with at least one turn, by local date. */
@@ -29,6 +33,9 @@ export type Streak = { last: string | null; days: number; best: number }
 
 /** One local day's work, for the morning recap. */
 export type Day = { date: string; turns: number; commits: number; squashed: number; tests: number; xp: number }
+
+/** The old /buddy companion this pixling was adopted from: its days together count from then. */
+export type AdoptedFrom = { name: string; hatchedAt: number | null }
 
 export type Pixling = {
   v: 1
@@ -49,6 +56,9 @@ export type Pixling = {
   day: Day
   /** The model's verbal tics the pixling has heard, by kind. */
   tics: TicCounts
+  /** Its one-line personality: a template's, or an adopted Buddy's own. */
+  persona: string
+  adoptedFrom: AdoptedFrom | null
 }
 
 export const emptyStats = (): Stats => ({
@@ -66,6 +76,8 @@ export const emptyStats = (): Stats => ({
   permissions: 0,
   nights: 0,
   coldStarts: 0,
+  quips: 0,
+  quipTokens: 0,
 })
 
 export const emptyDay = (date: string): Day => ({ date, turns: 0, commits: 0, squashed: 0, tests: 0, xp: 0 })
@@ -116,6 +128,8 @@ export const hatchPixling = (random: () => number, now: number, dex: readonly st
     streak: { last: null, days: 0, best: 0 },
     day: emptyDay(''),
     tics: {},
+    persona: personaFor(species.id, now),
+    adoptedFrom: null,
   }
 }
 
@@ -210,12 +224,14 @@ export const revive = (value: unknown): Pixling | null => {
   const v = value as Partial<Pixling>
   if (v.v !== 1 || typeof v.species !== 'string' || typeof v.name !== 'string') return null
   if (!SPECIES.some(s => s.id === v.species)) return null
+  const hatchedAt = typeof v.hatchedAt === 'number' ? v.hatchedAt : Date.now()
+  const persona = typeof v.persona === 'string' ? oneLine(v.persona) : ''
   return {
     v: 1,
     species: v.species,
     isShiny: v.isShiny === true,
     name: v.name.slice(0, 24),
-    hatchedAt: typeof v.hatchedAt === 'number' ? v.hatchedAt : Date.now(),
+    hatchedAt,
     xp: typeof v.xp === 'number' && v.xp >= 0 ? v.xp : 0,
     hat: v.hat ?? null,
     face: v.face ?? null,
@@ -233,6 +249,14 @@ export const revive = (value: unknown): Pixling | null => {
       ? { ...emptyDay(v.day.date), ...numbersOf(v.day), date: v.day.date }
       : emptyDay(''),
     tics: isRecord(v.tics) ? numbersOf(v.tics) : {},
+    // A save from before personalities gets one seeded by its hatch: the same every session.
+    persona: persona || personaFor(v.species, hatchedAt),
+    adoptedFrom: isRecord(v.adoptedFrom) && typeof v.adoptedFrom.name === 'string'
+      ? {
+          name: v.adoptedFrom.name.slice(0, 24),
+          hatchedAt: typeof v.adoptedFrom.hatchedAt === 'number' && Number.isFinite(v.adoptedFrom.hatchedAt) ? v.adoptedFrom.hatchedAt : null,
+        }
+      : null,
   }
 }
 
@@ -295,8 +319,13 @@ export const mergeSave = (stored: Pixling, base: Pixling | null, ours: Pixling):
   }
   if (!isSameEgg || !since) return { ...(stored.hatchedAt > ours.hatchedAt ? stored : ours), ...person }
   const pick = <T>(theirs: T, was: T, now: T): T => (now === was ? theirs : now)
+  // A record read back from the store is a new object each time: compared by value.
+  const pickValue = <T>(theirs: T, was: T, now: T): T => (JSON.stringify(now) === JSON.stringify(was) ? theirs : now)
   return {
     ...stored,
+    species: pick(stored.species, since.species, ours.species),
+    persona: pick(stored.persona, since.persona, ours.persona),
+    adoptedFrom: pickValue(stored.adoptedFrom, since.adoptedFrom, ours.adoptedFrom),
     name: pick(stored.name, since.name, ours.name),
     hat: pick(stored.hat, since.hat, ours.hat),
     face: pick(stored.face, since.face, ours.face),
@@ -320,5 +349,8 @@ export const xpBar = (into: number, need: number, width: number): string => {
   return '█'.repeat(filled) + '░'.repeat(width - filled)
 }
 
+/** When the person met this pixling: an adopted Buddy's hatch, else its own. */
+export const metAt = (p: Pixling): number => p.adoptedFrom?.hatchedAt ?? p.hatchedAt
+
 export const daysTogether = (p: Pixling, now: number): number =>
-  Math.max(1, Math.floor((now - p.hatchedAt) / 86_400_000) + 1)
+  Math.max(1, Math.floor((now - metAt(p)) / 86_400_000) + 1)

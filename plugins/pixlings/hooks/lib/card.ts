@@ -6,7 +6,7 @@ import { blank, renderFrame, stamp, TRANSPARENT } from './canvas.ts'
 import type { Pixels } from './canvas.ts'
 import { print, printSpans, spansWidth, textWidth } from './font.ts'
 import type { Span } from './font.ts'
-import { daysTogether, gearOf, levelOf } from './progress.ts'
+import { daysTogether, gearOf, levelOf, metAt } from './progress.ts'
 import type { Pixling } from './progress.ts'
 import { RARITY_COLOR, RARITY_ORDER, speciesById } from './sprites.ts'
 import { topTics } from './tics.ts'
@@ -80,7 +80,7 @@ const quoteLine = (px: Pixling): Span[] => {
       [` ×${n(top.n)}`, GOLD],
     ]
   }
-  const d = new Date(px.hatchedAt)
+  const d = new Date(metAt(px))
   const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   return [
     ['FRIENDS SINCE ', DIM],
