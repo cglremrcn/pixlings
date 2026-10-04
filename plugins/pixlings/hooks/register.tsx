@@ -1754,15 +1754,6 @@ export const register: Register = (on, options) => {
     })
   }
 
-  /** The room's pet Button: what `/pixling pet` does, without the command's transcript row. */
-  const petFromRoom = async (): Promise<void> => {
-    if (!pixling) return
-    petsToday += 1
-    count('pets')
-    await express({ mood: 'love', priority: PRIORITY.pet, holdMs: 2600, line: 'pet', sound: 'pet' })
-    if (petsToday <= 20) await grant('pet')
-  }
-
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const v = await read($, view)
     const p = pixling
@@ -1897,12 +1888,12 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Spinner' }, ($, e, next) => {
-    if (!pixling || !turnVerb || e.surface !== 'terminal' || e.props.message !== null) return next(e)
+    if (!pixling || isAway || !turnVerb || e.surface !== 'terminal' || e.props.message !== null) return next(e)
     return next({ ...e, props: { ...e.props, word: turnVerb } })
   })
 
   on('ui.render', { component: 'TurnDuration' }, ($, e, next) => {
-    if (!pixling || !turnPast) return next(e)
+    if (!pixling || isAway || !turnPast) return next(e)
     return next({ ...e, props: { ...e.props, word: turnPast } })
   })
 
@@ -1912,6 +1903,8 @@ export const register: Register = (on, options) => {
     const p = pixling
     const subs = e.props.command === 'buddy' ? ['', 'card'] : ['', 'card', 'dex']
     if (!p || e.props.isErrored || !subs.includes(sub)) return next(e)
+    // Sent away: the card and the dex are the engine's plain line until it is called back.
+    if ((await read($, roomAway)) === true) return next(e)
     const s = species()
     const color = hex(RARITY_COLOR[s.rarity])
 
@@ -1964,8 +1957,6 @@ export const register: Register = (on, options) => {
       )
     }
 
-    // Sent away: the card is the engine's plain line until it is called back.
-    if ((await read($, roomAway)) === true) return next(e)
     const persona = personaLine(await read($, roomPersona))
     const { level, into, need } = levelOf(p.xp)
     const { hat, face } = gearOf(p)
@@ -2075,7 +2066,7 @@ export const register: Register = (on, options) => {
         void update($, roomAtom, () => ({ tab }))
       },
       pet: () => {
-        void petFromRoom()
+        void pet()
           .then(() => $.ui.invalidate('ui.render'))
           .catch(() => undefined)
       },
@@ -2100,6 +2091,7 @@ export const register: Register = (on, options) => {
     /** What the pixling had heard when the transcript was first drawn; the count goes on from it. */
     let heardBefore: number | null = null
     on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+      if (isAway) return next(e)
       if (heardBefore === null && pixling) heardBefore = pixling.tics.absolutelyRight ?? 0
       const drawn = await next(e)
       const text = e.props.text

@@ -581,6 +581,45 @@ describe('the heckle', () => {
     await second.unmount()
   })
 
+  test('sent away, the spinner, the turn word, the dex and the heckle are the engine own', { options: { heckle: true }, timeoutMs: LONG }, async ($, on) => {
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    const { clock, asked } = host(on, DUCK)
+    await start($)
+    await clock.advance(3000)
+    await $.turn.start({ text: 'go', turnId: 't' } as never)
+    const spinner = { plugin: 'pixlings', surface: 'terminal', component: 'Spinner', props: { word: 'Working', message: null, suffix: '', mode: 'responding' } } as const
+    const turn = { plugin: 'pixlings', surface: 'terminal', component: 'TurnDuration', props: { word: 'Worked', durationMs: 4000 } } as const
+    const wordOf = (requestId: string) => (asked.filter(a => a.requestId === requestId).at(-1)?.props as { word?: string } | undefined)?.word
+
+    // Here, it lends the spinner and the turn its words, heckles, and draws the dex.
+    const s1 = await $.ui.mount({ ...spinner, requestId: 'spin-here' })
+    expect(wordOf('spin-here')).not.toBe('Working')
+    await s1.unmount()
+    const t1 = await $.ui.mount({ ...turn, requestId: 'turn-here' })
+    expect(wordOf('turn-here')).not.toBe('Worked')
+    await t1.unmount()
+    const m1 = await $.ui.mount(message('terminal', 'here', RIGHT))
+    expect(await m1.find({ type: 'Text', text: /^\(¬_¬\) #/ })).toBeDefined()
+    await m1.unmount()
+    const d1 = await $.ui.mount({ ...card('pixling', 'dex'), surface: 'terminal' })
+    expect(await d1.drawn()).not.toEqual(ENGINE)
+    await d1.unmount()
+
+    await $.command.run({ command: 'pixling', args: 'off' } as never)
+    const s2 = await $.ui.mount({ ...spinner, requestId: 'spin-away' })
+    expect(wordOf('spin-away')).toBe('Working')
+    await s2.unmount()
+    const t2 = await $.ui.mount({ ...turn, requestId: 'turn-away' })
+    expect(wordOf('turn-away')).toBe('Worked')
+    await t2.unmount()
+    const m2 = await $.ui.mount(message('terminal', 'away', RIGHT))
+    expect(await m2.drawn()).toEqual(ENGINE)
+    await m2.unmount()
+    const d2 = await $.ui.mount({ ...card('pixling', 'dex'), surface: 'terminal' })
+    expect(await d2.drawn()).toEqual(ENGINE)
+    await d2.unmount()
+  })
+
   test('on, a message without the tic is the engine own', { options: { heckle: true } }, async ($, on) => {
     const { clock } = host(on, DUCK)
     await start($)
