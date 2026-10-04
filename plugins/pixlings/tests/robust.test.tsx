@@ -215,7 +215,7 @@ describe('the nap', () => {
     expect(ran.some(r => r.argv.join(' ').includes('Your usage limit has reset'))).toBe(true)
   })
 
-  test('a prompt from Remote Control is the person: it cancels the auto-continue', async ($, on) => {
+  test('a prompt from Remote Control is the person: it cancels the auto-continue', { timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted } = host(on, DUCK)
     const resetsAt = NOON + 5 * MIN
     usage(on, fullUntil(resetsAt))
@@ -229,7 +229,7 @@ describe('the nap', () => {
     expect(submitted).toEqual(['ok, now do the other thing'])
   })
 
-  test('a background task notification is not the person: the auto-continue stands', async ($, on) => {
+  test('a background task notification is not the person: the auto-continue stands', { timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted } = host(on, DUCK)
     const resetsAt = NOON + 5 * MIN
     usage(on, fullUntil(resetsAt))
@@ -243,7 +243,7 @@ describe('the nap', () => {
     expect(continues(submitted).length).toBe(1)
   })
 
-  test('still limited at the planned reset: it sleeps on to the new one instead of claiming a reset', async ($, on) => {
+  test('still limited at the planned reset: it sleeps on to the new one instead of claiming a reset', { timeoutMs: LONG }, async ($, on) => {
     const { clock, submitted, ran } = host(on, DUCK)
     const first = NOON + 5 * MIN
     const later = NOON + 9 * MIN

@@ -10,6 +10,9 @@ import { hatchPixling, roll, xpForLevel } from '../hooks/lib/progress.ts'
 import { checkSpecies, SPECIES } from '../hooks/lib/sprites.ts'
 import type { Species } from '../hooks/lib/sprites.ts'
 
+/** Tests that run minutes or days of clock: about a second alone, slower when suites share the CPU. */
+const LONG = 20_000
+
 /** A better-mixed seeded generator than an LCG for a long run of rolls. */
 const mulberry32 = (seed: number) => () => {
   seed = (seed + 0x6d2b79f5) | 0
@@ -73,7 +76,7 @@ describe('the new species', () => {
     expect(SPECIES.filter(s => s.rarity === 'legendary').map(s => s.id)).toEqual(['dragon'])
   })
 
-  test('every species × mood × hat × shiny × facing stays on the canvas', () => {
+  test('every species × mood × hat × shiny × facing stays on the canvas', { timeoutMs: LONG }, () => {
     const problems: string[] = []
     for (const real of SPECIES) {
       const p = probe(real)

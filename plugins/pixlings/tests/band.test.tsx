@@ -4,6 +4,9 @@ import type { On } from 'claude-code'
 
 import { SPECIES } from '../hooks/lib/sprites.ts'
 
+/** Tests that run minutes or days of clock: about a second alone, slower when suites share the CPU. */
+const LONG = 20_000
+
 const BAND = {
   plugin: 'pixlings',
   component: 'AbovePrompt',
@@ -244,7 +247,7 @@ describe('the band', () => {
     }
   })
 
-  test('a model request starts the cache countdown; a minute before it cools the pixling warns', async ($, on) => {
+  test('a model request starts the cache countdown; a minute before it cools the pixling warns', { timeoutMs: LONG }, async ($, on) => {
     const { clock, ran } = host(on, DUCK)
     const step = model(on)
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
@@ -266,7 +269,7 @@ describe('the band', () => {
     await ui.unmount()
   })
 
-  test('coming back after the cache expired is a cold start it counts', async ($, on) => {
+  test('coming back after the cache expired is a cold start it counts', { timeoutMs: LONG }, async ($, on) => {
     const { clock, ran } = host(on, DUCK)
     const step = model(on)
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
