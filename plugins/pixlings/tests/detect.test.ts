@@ -133,7 +133,10 @@ describe('risky commands', () => {
     return best
   }
 
-  test('a 10,000-character command is read in under 5 ms, without regex backtracking', () => {
+  // A guard against backtracking, not a speed target: alone each read takes ~1 ms, and a
+  // quadratic or worse reader would take hundreds; the margin absorbs a machine busy with
+  // other suites.
+  test('a 10,000-character command is read in milliseconds, without regex backtracking', () => {
     const long = [
       'echo ' + '"a b c" '.repeat(1_300),
       'x'.repeat(10_000),
@@ -148,7 +151,7 @@ describe('risky commands', () => {
     ]
     for (const cmd of long) {
       expect(cmd.length).toBeGreaterThanOrEqual(10_000)
-      expect([cmd.slice(0, 12), fastest(cmd) < 5]).toEqual([cmd.slice(0, 12), true])
+      expect([cmd.slice(0, 12), fastest(cmd) < 25]).toEqual([cmd.slice(0, 12), true])
     }
   })
 
