@@ -16,8 +16,17 @@ type Pattern = { readonly tic: Tic; readonly re: RegExp; readonly label: string 
 
 const PATTERNS: readonly Pattern[] = [
   { tic: 'absolutelyRight', re: /\byou(?:['’]| a)re (?:absolutely|totally|completely|exactly) (?:right|correct)\b/gi, label: '"You\'re absolutely right"' },
-  { tic: 'greatQuestion', re: /\b(?:great|excellent|good) (?:question|catch|point)\b/gi, label: '"Great question"' },
-  { tic: 'apology', re: /\bapologi[sz]e for (?:the|any) (?:confusion|oversight)\b/gi, label: '"Apologies for the confusion"' },
+  // Praise standing on its own ("Great question!", "That's a good catch."), not "a good point to add".
+  {
+    tic: 'greatQuestion',
+    re: /(?<=^|[.!?]\s+|\b(?:that['’]?s|that is|what|such) an? )(?:great|excellent|good) (?:question|catch|point)(?=\s*(?:[!.,;:—–]|-\s|$))/gim,
+    label: '"Great question"',
+  },
+  {
+    tic: 'apology',
+    re: /\b(?:apologi[sz]e|apologies|sorry) for (?:the|any|my) (?:confusion|oversight|mistake|error)s?\b/gi,
+    label: '"Apologies for the confusion"',
+  },
   { tic: 'perfect', re: /(?:^|\n)\s*(?:Perfect|Excellent)[!.]/g, label: '"Perfect!"' },
   { tic: 'issue', re: /\bI (?:see|found|spotted) the (?:issue|problem)\b/gi, label: '"I see the issue"' },
   { tic: 'loadBearing', re: /\bload[- ]bearing\b/gi, label: '"load-bearing"' },
