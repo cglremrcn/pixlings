@@ -33,7 +33,35 @@ export type PixlingsCache = {
   uncached: number
   coldStarts: number
   rewritten: number
+  longHits?: number
+  isTtlFromSwitch?: boolean
 } | null
+
+// v0.3, wave 2. Each block below belongs to one slice; a slice changes only its own block.
+
+// --- buddy bridge and commands (W5) ---
+
+/** The pixling's one-line personality, from a template or an adopted Buddy; null before hatching. */
+export type PixlingsPersona = string | null
+
+// --- reactions and the squad (W6) ---
+
+/** One subagent's mini pixling while it works, and briefly after it finishes. */
+export type PixlingsMini = {
+  agentId: string
+  label: string
+  speciesId: string
+  startedAt: number
+  doneAt: number | null
+}
+
+/** A short effect played over the pixling: compaction squish, context sweat, the thinking cap. */
+export type PixlingsEffect = { kind: string; at: number } | null
+
+// --- every surface (W7) ---
+
+/** The room pane: which shelf is showing. */
+export type PixlingsRoom = { tab: string }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -45,6 +73,15 @@ declare module 'claude-code' {
       mood: PixlingsMood
       vitals: PixlingsVital[]
       cache: PixlingsCache
+      // W5
+      persona: PixlingsPersona
+      isAway: boolean
+      // W6
+      squad: PixlingsMini[]
+      isPlanning: boolean
+      effect: PixlingsEffect
+      // W7
+      room: PixlingsRoom
     }
   }
 }

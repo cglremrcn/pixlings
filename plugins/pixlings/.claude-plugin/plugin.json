@@ -106,6 +106,28 @@
         "off"
       ],
       "default": "animalese"
+    },
+    "quips": {
+      "type": "string",
+      "title": "AI quips",
+      "description": "off: only the pixling's built-in lines; it never spends tokens. haiku: now and then (red tests, errors, big diffs, or when you say its name; at most once a minute) it asks Claude Haiku for a one-line quip of about 100 tokens, and shows what each one cost.",
+      "options": [
+        "off",
+        "haiku"
+      ],
+      "default": "off"
+    },
+    "cacheGuard": {
+      "type": "boolean",
+      "title": "Cache guard on model switch",
+      "description": "Before a /model switch throws away a warm prompt cache that would cost real money to write again, the pixling asks you to confirm.",
+      "default": true
+    },
+    "heckle": {
+      "type": "boolean",
+      "title": "Heckle in the transcript",
+      "description": "Adds a faint eye roll and running count after Claude's \"You're absolutely right\" replies. Only the view changes; the saved conversation is untouched.",
+      "default": false
     }
   }
 }
