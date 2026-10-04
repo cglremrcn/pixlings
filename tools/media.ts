@@ -55,7 +55,7 @@ const clips: Clip[] = [
     name: 'roster',
     frames: 30,
     ms: 100,
-    columns: 9,
+    columns: 5,
     cells: SPECIES.map(s => ({
       label: s.name,
       at: t => renderFrame({ species: s, isShiny: false, mood: 'idle', t: t + s.id.length * 300 }),
@@ -65,7 +65,7 @@ const clips: Clip[] = [
     name: 'shiny',
     frames: 30,
     ms: 100,
-    columns: 9,
+    columns: 5,
     cells: SPECIES.map(s => ({
       label: s.name,
       at: t => renderFrame({ species: s, isShiny: true, mood: 'happy', t: t + s.id.length * 130 }),
