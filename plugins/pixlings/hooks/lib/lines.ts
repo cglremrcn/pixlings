@@ -159,7 +159,7 @@ const LINES: Record<LineKey, readonly string[]> = {
 }
 
 /** A species' own lines, mixed in with the shared ones. */
-const SPECIES_LINES: Partial<Record<string, Partial<Record<LineKey, readonly string[]>>>> = {
+export const SPECIES_LINES: Partial<Record<string, Partial<Record<LineKey, readonly string[]>>>> = {
   duck: {
     testFail: ['Explain it to me, line by line. Quack.', 'Have you tried explaining it to a duck?'],
     hello: ['Quack. Ready to listen.'],
@@ -196,6 +196,48 @@ const SPECIES_LINES: Partial<Record<string, Partial<Record<LineKey, readonly str
     commit: ['Another treasure for the hoard.'],
     danger: ['{label}? Not on MY branch.'],
     pet: ['*smoke puff*'],
+  },
+  capybara: {
+    hello: ['Hello. No rush.'],
+    danger: ['{label}? Hm. Okay.', '*keeps soaking* ({label})'],
+    testFail: ['Red tests. The water is still warm, though.'],
+    error: ['An error. Anyway.'],
+    pet: ['*content squeak*', '*leans into it*'],
+  },
+  turtle: {
+    hello: ['Ah, you return. Let us begin. Slowly.'],
+    testFail: ['Patience. Read the stack trace twice.'],
+    push: ['Off it goes. I remember when we used FTP.'],
+    lateNight: ['{time}. In my day, we slept.'],
+    pet: ['*retreats into shell, pleased*'],
+  },
+  snail: {
+    testPass: ['Slow and steady. All green.'],
+    done: ['Done. I was never in a hurry.'],
+    cacheCooling: ['Slow is fine. Cold is not. Cache cools in {dur}.'],
+    cacheCold: ['The cache went cold. I would have kept it warm.'],
+    pet: ['*antennae wiggle*', '*leaves a little trail*'],
+  },
+  penguin: {
+    hello: ['Booted. Kernel nominal.'],
+    testPass: ['All green! Belly slide!'],
+    commit: ['Committed. Linus would approve. Probably.'],
+    danger: ['{label}? That is how home directories vanish.'],
+    pet: ['*happy flipper flap*'],
+  },
+  goose: {
+    hello: ['HONK. I am here to cause problems.'],
+    testFail: ['HONK. Who wrote this?', 'HONK HONK. Bad code detected.'],
+    danger: ['{label}? Finally, some chaos. HONK.'],
+    absolutelyRight: ['"Absolutely right" #{n}? HONK.'],
+    pet: ['*suspicious honk*', '*hisses, affectionately*'],
+  },
+  rabbit: {
+    hello: ['Hi hi hi! What are we doing? Go go go!'],
+    done: ['Done! Next! Next! Next!'],
+    testPass: ['Green! *does a binky*'],
+    idle: ['*thump thump* Hurry up!'],
+    pet: ['*nose twitch*', '*happy binky*'],
   },
 }
 
