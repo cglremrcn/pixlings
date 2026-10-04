@@ -50,6 +50,8 @@ import type { Day, Pixling, Stats, XpEvent } from './lib/progress.ts'
 import { base64, rasterOf, rowsFor, toSvg } from './lib/raster.ts'
 import { isWalking, newWalker, roamRange, walk } from './lib/roam.ts'
 import type { RoamMode, Walker } from './lib/roam.ts'
+import { briefLine, cardLines, drawRoom, personaLine, seatOf, tabOf } from './lib/room.ts'
+import type { RoomActions, RoomModel } from './lib/room.ts'
 import { RARITY_COLOR, RARITY_STARS, SPECIES, speciesById } from './lib/sprites.ts'
 import type { Species } from './lib/sprites.ts'
 import { addTics, isEyeRoll, ticsIn, topTics } from './lib/tics.ts'
@@ -1711,23 +1713,74 @@ export const register: Register = (on, options) => {
 
   // Drawing -------------------------------------------------------------------------------
 
+  // Values other parts of the pixling write: one never written reads as absent, and the
+  // drawings go on as before it.
+  const roomPersona = { plugin: 'pixlings', key: 'persona' } as const
+  const roomAway = { plugin: 'pixlings', key: 'isAway' } as const
+  const roomSquad = { plugin: 'pixlings', key: 'squad' } as const
+  const roomPlanning = { plugin: 'pixlings', key: 'isPlanning' } as const
+  const roomEffect = { plugin: 'pixlings', key: 'effect' } as const
+  /** The room's shelf on show. */
+  const roomAtom = atom({ plugin: 'pixlings', key: 'room' } as const, { tab: 'home' })
+  const wantsHeckle = options['heckle'] === true
+
+  /** What the band and the room say: the nap's countdown while it sleeps, else its line. */
+  const sayingNow = (napping: PixlingsNap, said: PixlingsBubble, at: number): string | null =>
+    napping !== null
+      ? napping.until !== null
+        ? `Zzz... back at ${resetTime(napping.until)} (${formatDuration(napping.until - at)})${napping.isAuto ? ', then Claude carries on' : ''}`
+        : 'Zzz... napping through the limit.'
+      : (said?.text ?? null)
+
+  /** The pixling as the room draws it: in place, in its mood and gear; the egg while it hatches. */
+  const roomFrame = (at: number): Pixels => {
+    const p = pixling
+    if (!p) return renderHatch({ species: SPECIES[0]!, isShiny: false, mood: 'idle', t: 200 }, RARITY_COLOR.common)
+    if (isHatching(at)) return frameAt(at)
+    const { mood, since } = currentMood(at)
+    const { hat, face } = gearOf(p)
+    return renderFrame({
+      species: species(),
+      isShiny: p.isShiny,
+      mood,
+      t: at - since,
+      hat,
+      face,
+      icon: icon && at < icon.until ? icon.icon : null,
+    })
+  }
+
+  /** The room's pet Button: what `/pixling pet` does, without the command's transcript row. */
+  const petFromRoom = async (): Promise<void> => {
+    if (!pixling) return
+    petsToday += 1
+    count('pets')
+    await express({ mood: 'love', priority: PRIORITY.pet, holdMs: 2600, line: 'pet', sound: 'pet' })
+    if (petsToday <= 20) await grant('pet')
+  }
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const v = await read($, view)
-    if (e.props.hasSurvey || bandMode === 'off' || !v || !pixling || e.props.maxRows < 1) return next(e)
+    const p = pixling
+    if (e.props.hasSurvey || bandMode === 'off' || !v || !p || e.props.maxRows < 1) return next(e)
+    // Sent away: nothing of it shows until it is called back.
+    if ((await read($, roomAway)) === true) {
+      bandId = null
+      return next(e)
+    }
     const said = await read($, bubbleAtom)
     const napping = await read($, napAtom)
     const pieces = wantsVitals ? await read($, vitalsAtom) : []
     await read($, hatchAtom)
+    const persona = personaLine(await read($, roomPersona))
     bandColumns = e.props.bodyColumns
     const s = speciesById(v.speciesId) ?? SPECIES[0]!
     const color = hex(RARITY_COLOR[s.rarity])
     const at = now()
-    const text =
-      napping !== null
-        ? napping.until !== null
-          ? `Zzz... back at ${resetTime(napping.until)} (${formatDuration(napping.until - at)})${napping.isAuto ? ', then Claude carries on' : ''}`
-          : 'Zzz... napping through the limit.'
-        : (said?.text ?? null)
+    const text = sayingNow(napping, said, at)
+    // Under the pointer the band shows its card: who it is, the streak, the badges, the days
+    // together and what it heard. The surface reveals it; no hook runs.
+    const card = cardLines(p, persona, at)
 
     const frame = bandMode === 'full' ? frameAt(at) : null
     const width = frame ? Math.max(16, Math.min(56, e.props.bodyColumns - frame.w - 4)) : 0
@@ -1739,14 +1792,25 @@ export const register: Register = (on, options) => {
     if (!frame || isCramped) {
       bandId = null
       const mood = (await read($, moodAtom)) as Mood
+      const face = `${FACES[mood] ?? FACES.idle} `
+      // The card's line goes in the room the line leaves, sized to it, so revealing it moves
+      // nothing: a row that overflowed would squeeze the name.
+      const spare =
+        e.props.bodyColumns - 1 - face.length - v.name.length - ` · Lv ${v.level}`.length -
+        (pieces[0] ? pieces[0].text.length + 2 : 0) - (text ? text.length + 2 : 0)
       const { Box, Text } = $.ui.resolve(e)
       return (
-        <Box flexDirection="row">
-          <Text color={color}>{`${FACES[mood] ?? FACES.idle} `}</Text>
+        <Box key="band" flexDirection="row">
+          <Text color={color}>{face}</Text>
           <Text bold>{v.name}</Text>
           <Text dimColor>{` · Lv ${v.level}`}</Text>
           {pieces[0] ? <Text color={TONE_COLOR[pieces[0].tone]} dimColor={pieces[0].tone === 'dim'}>{`  ${pieces[0].text}`}</Text> : null}
           {text ? isCramped ? <Text wrap="truncate-end">{`  ${text}`}</Text> : <Text>{`  ${text}`}</Text> : null}
+          {spare >= 12 ? (
+            <Box display="none" hover={{ display: 'flex' }} width={spare} flexShrink={0}>
+              <Text dimColor wrap="truncate-end">{`  ${briefLine(p, persona, at)}`}</Text>
+            </Box>
+          ) : null}
         </Box>
       )
     }
@@ -1783,6 +1847,22 @@ export const register: Register = (on, options) => {
             ))}
           </Box>
         ) : null}
+        <Box
+          position="absolute"
+          bottom={0}
+          left={0}
+          width={width}
+          display="none"
+          hover={{ display: 'flex' }}
+          flexDirection="column"
+          borderStyle="round"
+          borderColor={color}
+          paddingX={1}
+        >
+          {card.map(line => (
+            <Text wrap="truncate-end">{line}</Text>
+          ))}
+        </Box>
       </Box>
     )
 
@@ -1792,7 +1872,7 @@ export const register: Register = (on, options) => {
       const raster = rasterOf(frame)
       bandRows = raster.rows
       return (
-        <Box flexDirection="row" alignItems="flex-end">
+        <Box key="band" flexDirection="row" alignItems="flex-end">
           <Raster key={RASTER_KEY} columns={raster.columns} rows={raster.rows} cells={raster.cells} />
           {info(Box, Text, Button)}
         </Box>
@@ -1801,7 +1881,7 @@ export const register: Register = (on, options) => {
     svgSeenAt = at
     const { Box, Text, Button, Svg } = $.ui.resolve(e)
     return (
-      <Box flexDirection="row" alignItems="flex-end">
+      <Box key="band" flexDirection="row" alignItems="flex-end">
         <Svg source={toSvg(frame, 4)} alt={`${v.name} the ${s.name}`} width={frame.w * 4} height={frame.h * 4} />
         {info(Box, Text, Button)}
       </Box>
@@ -1818,10 +1898,12 @@ export const register: Register = (on, options) => {
     return next({ ...e, props: { ...e.props, word: turnPast } })
   })
 
-  on('ui.render', { component: 'CommandOutput', props: { command: 'pixling' } }, async ($, e, next) => {
+  // `/pixling` and `/buddy` print the card; `/pixling dex` the species hatched so far.
+  on('ui.render', { component: 'CommandOutput', props: { command: ['pixling', 'buddy'] } }, async ($, e, next) => {
     const sub = e.props.args.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
     const p = pixling
-    if (!p || e.props.isErrored || !['', 'card', 'dex'].includes(sub)) return next(e)
+    const subs = e.props.command === 'buddy' ? ['', 'card'] : ['', 'card', 'dex']
+    if (!p || e.props.isErrored || !subs.includes(sub)) return next(e)
     const s = species()
     const color = hex(RARITY_COLOR[s.rarity])
 
@@ -1874,6 +1956,9 @@ export const register: Register = (on, options) => {
       )
     }
 
+    // Sent away: the card is the engine's plain line until it is called back.
+    if ((await read($, roomAway)) === true) return next(e)
+    const persona = personaLine(await read($, roomPersona))
     const { level, into, need } = levelOf(p.xp)
     const { hat, face } = gearOf(p)
     const frame = renderFrame({ species: s, isShiny: p.isShiny, mood: 'happy', t: 0, hat, face })
@@ -1900,6 +1985,11 @@ export const register: Register = (on, options) => {
           <Text color={color}>{xpBar(into, need, 16)}</Text>
           <Text dimColor>{` Lv ${level} · ${into}/${need} xp`}</Text>
         </Box>
+        {persona ? (
+          <Text italic wrap="wrap">
+            {persona}
+          </Text>
+        ) : null}
         <Text dimColor wrap="wrap">
           {s.blurb}
         </Text>
@@ -1933,4 +2023,96 @@ export const register: Register = (on, options) => {
       </Box>
     )
   })
+
+  // The room: the pane `/pixling room` opens, on every surface. The id is room.ts's ROOM_ID,
+  // written out so `claude plugin validate` can list it.
+  on('ui.render', { component: 'Pane', requestId: 'pixling-room' }, async ($, e) => {
+    // Each read subscribes the room to a redraw: a new line, a level, a nap, the shelf on show.
+    await read($, view)
+    const said = await read($, bubbleAtom)
+    const napping = await read($, napAtom)
+    const pieces = wantsVitals ? await read($, vitalsAtom) : []
+    await read($, hatchAtom)
+    const room = await read($, roomAtom)
+    const persona = personaLine(await read($, roomPersona))
+    const isAway = (await read($, roomAway)) === true
+    const squad = (await read($, roomSquad)) ?? []
+    const isPlanning = (await read($, roomPlanning)) === true
+    const effect = (await read($, roomEffect)) ?? null
+    const at = now()
+    const tab = tabOf(room.tab)
+    const frame = roomFrame(at)
+    const isEgg = !pixling || isHatching(at)
+    const columns = e.props.bodyColumns > 0 ? e.props.bodyColumns : (e.viewport?.columns ?? 40)
+    const seat = seatOf(columns, e.surface === 'terminal', frame.w)
+    // The pixling moves on the home shelf: the frame clock redraws what drew it lately (tick).
+    if (!isAway && (tab === 'home' || isEgg)) svgSeenAt = at
+    const model: RoomModel = {
+      at,
+      pixling,
+      frame,
+      isHatching: pixling !== null && isHatching(at),
+      tab,
+      bubble: sayingNow(napping, said, at),
+      persona,
+      vitals: pieces.map(piece => ({ text: piece.text, color: TONE_COLOR[piece.tone], isDim: piece.tone === 'dim' })),
+      squad,
+      isPlanning,
+      effect,
+      isAway,
+      isFocused: e.props.isFocused,
+    }
+    const act: RoomActions = {
+      show: tab => {
+        void update($, roomAtom, () => ({ tab }))
+      },
+      pet: () => {
+        void petFromRoom()
+          .then(() => $.ui.invalidate('ui.render'))
+          .catch(() => undefined)
+      },
+    }
+    if (e.surface === 'terminal') {
+      const { Box, Text, Button, Raster } = $.ui.resolve(e)
+      return drawRoom({ Box, Text, Button, Raster }, seat, model, act)
+    }
+    const { Box, Text, Button, Svg } = $.ui.resolve(e)
+    return drawRoom({ Box, Text, Button, Svg }, seat, model, act)
+  })
+
+  // Heckle: a faint eye roll and the running count under Claude's "You're absolutely right".
+  // Only the drawing changes: the engine's own message is drawn from the props as received, and
+  // the stored message is never touched. Hooked only when asked for, since every redraw of this
+  // plugin's sites re-runs a hook on each message it matches ($.ui.invalidate).
+  if (wantsHeckle) {
+    /** Message id (`e.requestId`) → its place in the count, so a redraw never renumbers it. */
+    const heckled = new Map<string, number>()
+    /** Message id → the text's length when last scanned and whether it held the tic. */
+    const scanned = new Map<string, { length: number; hasTic: boolean }>()
+    /** What the pixling had heard when the transcript was first drawn; the count goes on from it. */
+    let heardBefore: number | null = null
+    on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+      if (heardBefore === null && pixling) heardBefore = pixling.tics.absolutelyRight ?? 0
+      const drawn = await next(e)
+      const text = e.props.text
+      const last = scanned.get(e.requestId)
+      const hasTic = last && last.length === text.length ? last.hasTic : (ticsIn(text).absolutelyRight ?? 0) > 0
+      scanned.set(e.requestId, { length: text.length, hasTic })
+      if (!hasTic) return drawn
+      let n = heckled.get(e.requestId)
+      if (n === undefined) {
+        n = (heardBefore ?? 0) + heckled.size + 1
+        heckled.set(e.requestId, n)
+      }
+      const { Box, Text } = $.ui.resolve(e)
+      return (
+        <Box flexDirection="column">
+          {drawn}
+          <Box marginLeft={2}>
+            <Text dimColor>{`(¬_¬) #${n}`}</Text>
+          </Box>
+        </Box>
+      )
+    })
+  }
 }
