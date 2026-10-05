@@ -82,6 +82,12 @@ type HostOptions = {
   reply?: () => Reply
 }
 
+/**
+ * The path as the pixling asked for it. The tests play a Windows machine, and on a POSIX host the
+ * engine takes `C:\…` for a relative path and puts the working directory before it.
+ */
+const asAsked = (path: string): string => path.replace(/^.*[\\/](?=[A-Za-z]:\\)/, '')
+
 /** The engine beneath the pixling: a store the test reads, and every call the pixling makes. */
 const host = (on: On, o: HostOptions = {}) => {
   const clock = mock.clock(on, { now: NOON })
@@ -108,10 +114,11 @@ const host = (on: On, o: HostOptions = {}) => {
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.read', ($, e) => {
-    reads.push(e.path)
+    const path = asAsked(e.path)
+    reads.push(path)
     if (o.refuse) return { deny: o.refuse } as never
-    if (!o.read) return { deny: `ENOENT: no such file or directory, open '${e.path}'` } as never
-    return { value: o.read(e.path) } as never
+    if (!o.read) return { deny: `ENOENT: no such file or directory, open '${path}'` } as never
+    return { value: o.read(path) } as never
   })
   on('model.complete', ($, e) => {
     models.push(e)
