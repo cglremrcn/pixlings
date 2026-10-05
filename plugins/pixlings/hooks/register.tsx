@@ -50,8 +50,8 @@ import type { Day, Pixling, Stats, XpEvent } from './lib/progress.ts'
 import { base64, rasterOf, rowsFor, toSvg } from './lib/raster.ts'
 import { isWalking, newWalker, roamRange, walk } from './lib/roam.ts'
 import type { RoamMode, Walker } from './lib/roam.ts'
-import { ROOM_EGG_KEY, ROOM_SPRITE_KEY, briefLine, cardLines, drawRoom, personaLine, seatOf, tabOf } from './lib/room.ts'
-import type { RoomActions, RoomModel } from './lib/room.ts'
+import { CARD_MAX, ROOM_EGG_KEY, ROOM_SPRITE_KEY, briefLine, cardModel, drawCard, drawRoom, personaLine, seatOf, tabOf } from './lib/room.ts'
+import type { RoomActions, RoomKit, RoomModel } from './lib/room.ts'
 import { RARITY_COLOR, RARITY_STARS, SPECIES, speciesById } from './lib/sprites.ts'
 import type { Species } from './lib/sprites.ts'
 import { addTics, isEyeRoll, ticsIn, topTics } from './lib/tics.ts'
@@ -153,6 +153,7 @@ const TONE_COLOR: Readonly<Record<PixlingsVital['tone'], string | undefined>> = 
 
 /** The hover card's fill and ink: its own pair, readable whatever the terminal's colors are. */
 const CARD_FILL = '#1a1b26'
+const CARD_FILL_PX = parseInt(CARD_FILL.slice(1), 16)
 const CARD_INK = '#c0caf5'
 
 const isTtl = (value: unknown): value is Ttl => value === '5m' || value === '1h'
@@ -2181,10 +2182,12 @@ export const register: Register = (on, options) => {
     const text = sayingNow(napping, said, at)
     // Under the pointer the band shows its card: who it is, the streak, the badges, the days
     // together and what it heard. The surface reveals it; no hook runs.
-    const card = cardLines(p, persona, at)
+    const card = cardModel(p, persona, at)
 
     const frame = bandMode === 'full' ? frameAt(at) : null
     const width = frame ? Math.max(16, Math.min(56, e.props.bodyColumns - frame.w - 4)) : 0
+    // The card opens past the info rows, over the band's empty right, so its shelf has room.
+    const cardWidth = frame ? Math.max(width, Math.min(CARD_MAX, e.props.bodyColumns - frame.w - 4)) : 0
     // The full band is as tall as the sprite or the column beside it; past the rows it may take,
     // it folds into the one-line band.
     const columnRows = 2 + (pieces.length > 0 ? 1 : 0) + (text ? 2 + Math.ceil(text.length / Math.max(1, width - 4)) : 0)
@@ -2219,7 +2222,7 @@ export const register: Register = (on, options) => {
     lastFrame = frame
     const stars = `${RARITY_STARS[s.rarity]}${v.isShiny ? ' ✦' : ''}`
 
-    const info = (Box: Kit['Box'], Text: Kit['Text'], Button: Kit['Button']) => (
+    const info = (Box: Kit['Box'], Text: Kit['Text'], Button: Kit['Button'], kit: RoomKit) => (
       <Box flexDirection="column" marginLeft={1} flexShrink={1} width={width}>
         {text ? (
           <Box borderStyle="round" borderColor={color} paddingX={1} width={width}>
@@ -2253,7 +2256,7 @@ export const register: Register = (on, options) => {
           position="absolute"
           bottom={0}
           left={0}
-          width={width}
+          width={cardWidth}
           display="none"
           hover={{ display: 'flex' }}
           flexDirection="column"
@@ -2262,11 +2265,7 @@ export const register: Register = (on, options) => {
           backgroundColor={CARD_FILL}
           paddingX={1}
         >
-          {card.map(line => (
-            <Text color={CARD_INK} wrap="truncate-end">
-              {line}
-            </Text>
-          ))}
+          {drawCard(kit, card, cardWidth, CARD_FILL_PX, CARD_INK)}
         </Box>
       </Box>
     )
@@ -2279,7 +2278,7 @@ export const register: Register = (on, options) => {
       return (
         <Box key="band" flexDirection="row" alignItems="flex-end">
           <Raster key={RASTER_KEY} columns={raster.columns} rows={raster.rows} cells={raster.cells} />
-          {info(Box, Text, Button)}
+          {info(Box, Text, Button, { Box, Text, Button, Raster })}
         </Box>
       )
     }
@@ -2288,7 +2287,7 @@ export const register: Register = (on, options) => {
     return (
       <Box key="band" flexDirection="row" alignItems="flex-end">
         <Svg source={toSvg(frame, 4)} alt={`${v.name} the ${s.name}`} width={frame.w * 4} height={frame.h * 4} />
-        {info(Box, Text, Button)}
+        {info(Box, Text, Button, { Box, Text, Button, Svg })}
       </Box>
     )
   })

@@ -16,7 +16,7 @@ import type {
 import type { PixlingsEffect, PixlingsMini } from '../../types'
 import { BADGES, earnedBadges, localDate } from './badges.ts'
 import type { Badge } from './badges.ts'
-import { renderFrame, renderSilhouette, TRANSPARENT } from './canvas.ts'
+import { blank, renderFrame, renderSilhouette, stamp, TRANSPARENT } from './canvas.ts'
 import type { Pixels } from './canvas.ts'
 import { daysTogether, levelOf, xpBar } from './progress.ts'
 import type { Pixling } from './progress.ts'
@@ -177,17 +177,109 @@ export const personaLine = (persona: unknown): string | null => {
   return chars.length > PERSONA_MAX ? `${chars.slice(0, PERSONA_MAX - 1).join('').trimEnd()}…` : line
 }
 
+// The hover card -----------------------------------------------------------------------------
+
 /** The band's hover card: who it is, the streak, the badges, the days together, what it heard. */
-export const cardLines = (p: Pixling, persona: string | null, at: number): string[] => {
-  const s = speciesOf(p)
-  const earned = earnedBadges(p)
+export type CardModel = {
+  readonly persona: string
+  readonly streak: { readonly days: number; readonly best: number }
+  readonly days: number
+  /** Earned badges, the oldest first. */
+  readonly earned: readonly Badge[]
+  readonly heard: string
+}
+
+export const cardModel = (p: Pixling, persona: string | null, at: number): CardModel => {
   const heard = topTics(p.tics, 2)
-  return [
-    persona ?? `${p.name} the ${s.name}`,
-    `🔥 ${p.streak.days}-day streak (best ${p.streak.best}) · ${plural(daysTogether(p, at), 'day')} together`,
-    `🏅 ${earned.length}/${BADGES.length} badges${earned.length > 0 ? ` ${earned.slice(-6).map(b => b.emoji).join(' ')}` : ''}`,
-    heard.length > 0 ? `Heard: ${heard.map(t => `${t.label} ×${t.n}`).join(' · ')}` : 'Heard: nothing to roll its eyes at, yet',
-  ]
+  return {
+    persona: persona ?? `${p.name} the ${speciesOf(p).name}`,
+    streak: { days: p.streak.days, best: p.streak.best },
+    days: daysTogether(p, at),
+    earned: earnedBadges(p),
+    heard: heard.length > 0 ? `Heard: ${heard.map(t => `${t.label} ×${t.n}`).join(' · ')}` : 'Heard: nothing to roll its eyes at, yet',
+  }
+}
+
+/** The widest the card opens: past the info rows, over the band's empty right. */
+export const CARD_MAX = 72
+/** Svg pixels per icon pixel on the surfaces that draw an Svg. */
+const ICON_SCALE = 3
+const STREAK_BADGE = BADGES.find(b => b.id === 'onFire')!
+
+/**
+ * An icon of the card as pixels, its blanks painted `fill`: the terminal shows its own background
+ * through a blank cell, which would punch holes in the opaque card. The height rounds up to even,
+ * since a cell holds two pixels and a lone top one leaves its bottom half blank.
+ */
+export const cardIcon = (b: Badge, fill: number): Pixels => {
+  const w = Math.max(...b.icon.map(row => row.length))
+  const p = blank(w, b.icon.length + (b.icon.length % 2))
+  p.px.fill(fill)
+  stamp(p, 0, 0, b.icon, b.colors)
+  return p
+}
+
+/** How many badge icons the shelf holds in a card `width` cells across, borders and padding in. */
+export const shelfFits = (width: number, textColumns: number): number => {
+  const inner = width - 4
+  const icon = Math.max(...BADGES.map(b => b.icon[0]?.length ?? 0)) + 1
+  // The flame, its text, the gap before the shelf and the count after it; the last icon on the
+  // shelf has no gap after it.
+  const taken = icon + textColumns + 3 + 7
+  return Math.max(0, Math.floor((inner - taken + 1) / icon))
+}
+
+/**
+ * The card's rows: who it is; the streak by its flame beside the badges on their shelf, newest
+ * last, with the count; and what it heard. The icons are the share card's own, so the two agree.
+ */
+export const drawCard = (kit: RoomKit, m: CardModel, width: number, fill: number, ink: string): RenderElement => {
+  const { Box, Text } = kit
+  const lines = [`${m.streak.days}-day streak`, `best ${m.streak.best}`, `${plural(m.days, 'day')} together`]
+  const textColumns = Math.max(...lines.map(l => l.length))
+  const fits = Math.min(m.earned.length, shelfFits(width, textColumns))
+  // Not slice(-0), which is every badge.
+  const shown = fits > 0 ? m.earned.slice(-fits) : []
+  const icon = (b: Badge, key: string, alt = b.name) => picture(kit, cardIcon(b, fill), ICON_SCALE, key, alt)
+  return Box({
+    flexDirection: 'column',
+    children: [
+      Text({ color: ink, wrap: 'truncate-end', children: m.persona }),
+      Box({
+        flexDirection: 'row',
+        children: [
+          icon(STREAK_BADGE, 'card-flame', 'Streak'),
+          Box({
+            flexDirection: 'column',
+            marginLeft: 1,
+            width: textColumns,
+            flexShrink: 0,
+            children: [
+              Text({ color: ink, bold: true, children: lines[0] }),
+              Text({ dimColor: true, children: lines[1] }),
+              Text({ dimColor: true, children: lines[2] }),
+            ],
+          }),
+          Box({
+            flexDirection: 'row',
+            marginLeft: 3,
+            columnGap: 1,
+            children: shown.map(b => icon(b, `card-badge-${b.id}`)),
+          }),
+          Box({
+            flexDirection: 'column',
+            marginLeft: 1,
+            flexShrink: 0,
+            children: [
+              Text({ color: ink, bold: true, children: `${m.earned.length}/${BADGES.length}` }),
+              Text({ dimColor: true, children: 'badges' }),
+            ],
+          }),
+        ],
+      }),
+      Text({ color: ink, wrap: 'truncate-end', children: m.heard }),
+    ],
+  })
 }
 
 /**

@@ -387,13 +387,33 @@ describe('the band', () => {
       expect(card?.props?.['backgroundColor'], surface).toBeDefined()
       const text = textOf(card)
       expect(text).toContain('A rubber duck who listens')
-      expect(text).toContain('🔥 4-day streak (best 6) · 33 days together')
-      expect(text).toContain('🏅 2/16 badges 🥚 🚀')
+      expect(text).toContain('4-day streak')
+      expect(text).toContain('best 6')
+      expect(text).toContain('33 days together')
+      expect(text).toContain('2/16')
       expect(text).toContain('Heard: "You\'re absolutely right" ×24 · "robust" ×3')
+      // The flame and the badges are drawn as the pixling is, never as emoji.
+      expect(/\p{Extended_Pictographic}/u.test(text), surface).toBe(false)
+      const icons = elements(card).filter(n => n.type === (surface === 'terminal' ? 'Raster' : 'Svg'))
+      expect(icons.length, surface).toBe(3)
+      if (surface === 'terminal') {
+        expect(icons.map(n => n.props?.['key'])).toEqual(['card-flame', 'card-badge-hello', 'card-badge-liftoff'])
+      }
+      // Never narrower than the info rows it lies over.
+      const column = elements(tree).find(n => (n.children ?? []).includes(card as never))
+      expect(Number(card?.props?.['width']), surface).toBeGreaterThanOrEqual(Number(column?.props?.['width']))
       // Not drawn until hovered: the plain band reads as before.
       expect(await ui.find({ type: 'Text', text: 'Quackers' }), surface).toBeDefined()
       await ui.unmount()
     }
+    // On a wide terminal it opens past the info rows, over the band's empty right.
+    const wide = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, bodyColumns: 160 }, viewport: { columns: 160, rows: 40 } })
+    const wideTree = await wide.drawn()
+    const opened = hoverReveal(wideTree)
+    const column = elements(wideTree).find(n => (n.children ?? []).includes(opened as never))
+    expect(Number(opened?.props?.['width'])).toBe(72)
+    expect(Number(column?.props?.['width'])).toBe(56)
+    await wide.unmount()
   })
 
   test('the one-line band reveals the same, on its line', { options: { band: 'minimal' }, timeoutMs: LONG }, async ($, on) => {

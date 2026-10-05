@@ -52,8 +52,9 @@ export const BADGES: readonly Badge[] = [
     emoji: '🐛',
     how: 'Squash 10 bugs (red tests → green)',
     progress: p => at(p.stats.bugsSquashed, 10),
-    icon: ['.K...K.', '..K.K..', '.GGGGG.', 'GGKGKGG', '.GGGGG.', 'GG.G.GG', '.......'],
-    colors: { G: 0x6fdc8c, K: 0x1b1424 },
+    // The antennae are a darker green: the near-black of the eyes vanishes on a dark card.
+    icon: ['.A...A.', '..A.A..', '.GGGGG.', 'GGKGKGG', '.GGGGG.', 'GG.G.GG', '.......'],
+    colors: { G: 0x6fdc8c, K: 0x1b1424, A: 0x3f9a4a },
   },
   {
     id: 'dangerous',
@@ -62,7 +63,7 @@ export const BADGES: readonly Badge[] = [
     how: 'Run 10 risky commands',
     progress: p => at(p.stats.risky, 10),
     icon: ['....Y.O', '...O...', '..KK...', '.KKKK..', 'KKWKKK.', 'KKKKKK.', '.KKKK..'],
-    colors: { K: 0x3a3550, W: 0xb8c2cc, Y: 0xffe14d, O: 0xff8a3d },
+    colors: { K: 0x4f4870, W: 0xb8c2cc, Y: 0xffe14d, O: 0xff8a3d },
   },
   {
     id: 'nightOwl',

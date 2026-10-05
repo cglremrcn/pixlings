@@ -13,7 +13,7 @@
 - **More reactions.** Squished under a press during compaction and springing back after; sweating once the context passes 85%; a thinking cap in plan mode.
 - **More vitals.** How much of a rate-limit window the last turn used (`turn +2%`), and the model and effort (`opus 5.5 · high`).
 - **The room.** `/pixling room` opens a pane with the pixling, its stats, a garden of the species found and a badge shelf. It works in the terminal, the desktop app, VS Code and the mobile app, so the pixling is no longer terminal- and desktop-only.
-- **A hover card.** Hover over the band for the personality, streak, badges, days together and the tics it has heard.
+- **A hover card.** Hover over the band for the personality, streak, badges, days together and the tics it has heard. The streak's flame and the badges you've earned are drawn in pixels, like the pixling itself.
 - **Away mode.** `/pixling off` sends it away (no band, sound, voice, notifications or auto-continue; stats still count) until `/pixling on`, across sessions.
 - **AI quips, opt-in.** With `quips: haiku`, red tests, API errors, big edits and saying its name now and then get a one-liner from Claude Haiku: at most one a minute, about a hundred tokens each, the cost shown beside the line. The request holds the pixling's name, species, personality and what happened in numbers, never code, prompts or files. Off by default.
 - **Heckle, opt-in.** With `heckle` on, a faint `(¬_¬) #N` appears under Claude's "You're absolutely right". Only the drawing changes; the conversation is untouched.
@@ -35,6 +35,7 @@
 - The weekly limit's reset shows its day.
 - The band folds into one line when it would be taller than the space it is given.
 - Windows: PowerShell no longer asks to bypass the execution policy, and speech reads UTF-8.
+- On the share card, the Exterminator bug shows its antennae and the bomb no longer fades into the dark background.
 
 ### Changed
 
